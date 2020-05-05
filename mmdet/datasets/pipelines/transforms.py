@@ -25,33 +25,40 @@ class Resizer(object):
     """Square images by resizing the long side of an image to
     the target size then padding the short side with zeros."""
 
-    def __init__(self, img_scale=512):
-        assert isinstance(img_scale, (int, list))
-        self.img_scale = img_scale \
-            if isinstance(img_scale, int) else random.choice(img_scale)
+    def __init__(self, img_scale=None):
+        if img_scale is None:
+            self.img_scale = None
+        else:
+            assert isinstance(img_scale, (int, list))
+            if isinstance(img_scale, list):
+                self.img_scale = random.choice(img_scale)
+            else:
+                self.img_scale = img_scale
 
     def __call__(self, results):
+        if 'scale' not in results:
+            results['scale'] = (self.img_scale, self.img_scale)
+
         img = results['img']
         h, w, _ = img.shape
         if h > w:
-            scale_factor = self.img_scale / h
-            resized_h = self.img_scale
+            scale_factor = results['scale'][0] / h
+            resized_h = results['scale'][0]
             resized_w = int(w * scale_factor)
         else:
-            scale_factor = self.img_scale / w
+            scale_factor = results['scale'][0] / w
             resized_h = int(h * scale_factor)
-            resized_w = self.img_scale
+            resized_w = results['scale'][0]
 
         # resize img
         img = mmcv.imresize(img, (resized_w, resized_h))
-        resized_img = np.zeros((self.img_scale, self.img_scale, 3))
+        resized_img = np.zeros(results['scale'] + (3,))
         resized_img[:resized_h, :resized_w] = img
 
         results['img'] = resized_img
         results['img_shape'] = resized_img.shape
         results['pad_shape'] = resized_img.shape  # in case that there is no padding
         results['scale_factor'] = scale_factor
-        results['scale'] = (self.img_scale, self.img_scale)
 
         # resize bboxes
         for key in results.get('bbox_fields', []):
@@ -64,7 +71,7 @@ class Resizer(object):
             masks = []
             for mask in results[key]:
                 mask = mmcv.imresize(mask, (resized_w, resized_h))
-                resized_mask = np.zeros((self.img_scale, self.img_scale))
+                resized_mask = np.zeros(results['scale'])
                 resized_mask[:resized_h, :resized_w] = mask
                 masks.append(resized_mask)
             results[key] = np.stack(masks)

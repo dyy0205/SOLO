@@ -68,11 +68,13 @@ train_pipeline = [
     #     hflag=False,
     #     aug_ratio=0.5),
     dict(type='LoadAnnotations', with_bbox=True, with_mask=True),
-    dict(type='Resizer', img_scale=[832, 768, 704, 640, 576, 512]),
-    # dict(type='Resize',
-    #      img_scale=[(832, 512), (832, 448), (832, 384)],
-    #      multiscale_mode='value',
-    #      keep_ratio=False),
+    # dict(type='Resizer', img_scale=[832, 768, 704, 640, 576, 512]),
+    dict(type='Resize',
+         # img_scale=[(832, 512), (832, 448), (832, 384)],
+         img_scale=[(832, 832), (768, 768), (704, 704),
+                    (640, 640), (576, 576), (512, 512)],
+         multiscale_mode='value',
+         keep_ratio=False),
     # dict(type='RandomCrop', crop_size=(384, 384)),
     dict(type='RandomFlip', flip_ratio=0.5),
     dict(type='Normalize', **img_norm_cfg),
@@ -84,12 +86,11 @@ test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(
         type='MultiScaleFlipAug',
-        img_scale=(832, 832),
-        # img_scale=(832, 512),
+        img_scale=(512, 512),
         flip=False,
         transforms=[
-            # dict(type='Resize', keep_ratio=False),
-            dict(type='Resizer'),
+            dict(type='Resize', keep_ratio=False),
+            # dict(type='Resizer'),
             dict(type='RandomFlip'),
             dict(type='Normalize', **img_norm_cfg),
             dict(type='Pad', size_divisor=32),
@@ -98,7 +99,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    imgs_per_gpu=30,
+    imgs_per_gpu=16,
     workers_per_gpu=4,
     train=dict(
         type=dataset_type,
@@ -135,11 +136,11 @@ log_config = dict(
     ])
 # yapf:enable
 # runtime settings
-total_epochs = 15
+total_epochs = 12
 device_ids = range(8)
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
 work_dir = './work_dirs/solov2_lite3_square'
 load_from = None
-resume_from = None
+resume_from = './work_dirs/solov2_lite3_square/last.pth'
 workflow = [('train', 1)]
