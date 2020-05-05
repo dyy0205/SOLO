@@ -14,10 +14,11 @@ from .ssd_head import SSDHead
 from .solo_head import SOLOHead
 from .decoupled_solo_head import DecoupledSOLOHead
 from .decoupled_solo_light_head import DecoupledSOLOLightHead
+from .solov2_head import SOLOV2Head
 
 __all__ = [
     'AnchorHead', 'GuidedAnchorHead', 'FeatureAdaption', 'RPNHead',
     'GARPNHead', 'RetinaHead', 'RetinaSepBNHead', 'GARetinaHead', 'SSDHead',
     'FCOSHead', 'RepPointsHead', 'FoveaHead', 'FreeAnchorRetinaHead',
-    'ATSSHead', 'SOLOHead', 'DecoupledSOLOHead', 'DecoupledSOLOLightHead'
+    'ATSSHead', 'SOLOHead', 'DecoupledSOLOHead', 'DecoupledSOLOLightHead', 'SOLOV2Head'
 ]

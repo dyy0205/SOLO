@@ -9,7 +9,7 @@ from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
 from mmcv.runner import DistSamplerSeedHook, Runner, obj_from_dict
 
 from mmdet import datasets
-from mmdet.core import (CocoDistEvalmAPHook, CocoDistEvalRecallHook,
+from mmdet.core import (CocoDistEvalmAPHook, CocoDistEvalRecallHook, CocoDistEvalmAPHook_segm,
                         DistEvalmAPHook, DistOptimizerHook, Fp16OptimizerHook)
 from mmdet.datasets import DATASETS, build_dataloader
 from mmdet.models import RPN
@@ -238,7 +238,7 @@ def _dist_train(model,
             dataset_type = DATASETS.get(val_dataset_cfg.type)
             if issubclass(dataset_type, datasets.CocoDataset):
                 runner.register_hook(
-                    CocoDistEvalmAPHook(val_dataset_cfg, **eval_cfg))
+                    CocoDistEvalmAPHook_segm(val_dataset_cfg, **eval_cfg))
             else:
                 runner.register_hook(
                     DistEvalmAPHook(val_dataset_cfg, **eval_cfg))

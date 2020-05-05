@@ -21,6 +21,63 @@ except ImportError:
 
 
 @PIPELINES.register_module
+class Resizer(object):
+    """Square images by resizing the long side of an image to
+    the target size then padding the short side with zeros."""
+
+    def __init__(self, img_scale=512):
+        assert isinstance(img_scale, (int, list))
+        self.img_scale = img_scale \
+            if isinstance(img_scale, int) else random.choice(img_scale)
+
+    def __call__(self, results):
+        img = results['img']
+        h, w, _ = img.shape
+        if h > w:
+            scale_factor = self.img_scale / h
+            resized_h = self.img_scale
+            resized_w = int(w * scale_factor)
+        else:
+            scale_factor = self.img_scale / w
+            resized_h = int(h * scale_factor)
+            resized_w = self.img_scale
+
+        # resize img
+        img = mmcv.imresize(img, (resized_w, resized_h))
+        resized_img = np.zeros((self.img_scale, self.img_scale, 3))
+        resized_img[:resized_h, :resized_w] = img
+
+        results['img'] = resized_img
+        results['img_shape'] = resized_img.shape
+        results['pad_shape'] = resized_img.shape  # in case that there is no padding
+        results['scale_factor'] = scale_factor
+        results['scale'] = (self.img_scale, self.img_scale)
+
+        # resize bboxes
+        for key in results.get('bbox_fields', []):
+            results[key] *= scale_factor
+
+        # resize masks
+        for key in results.get('mask_fields', []):
+            if results[key] is None:
+                continue
+            masks = []
+            for mask in results[key]:
+                mask = mmcv.imresize(mask, (resized_w, resized_h))
+                resized_mask = np.zeros((self.img_scale, self.img_scale))
+                resized_mask[:resized_h, :resized_w] = mask
+                masks.append(resized_mask)
+            results[key] = np.stack(masks)
+
+        return results
+
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += '(img_scale={}'.format(self.img_scale)
+        return repr_str
+
+
+@PIPELINES.register_module
 class Resize(object):
     """Resize images & bbox & mask.
 

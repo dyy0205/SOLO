@@ -11,8 +11,28 @@ from pycocotools.cocoeval import COCOeval
 from torch.utils.data import Dataset
 
 from mmdet import datasets
-from .coco_utils import fast_eval_recall, results2json
+from .coco_utils import fast_eval_recall, results2json, results2json_segm
 from .mean_ap import eval_map
+import pycocotools.mask as mask_util
+
+
+def get_masks(result, num_classes=80):
+    for cur_result in result:
+        masks = [[] for _ in range(num_classes)]
+        if cur_result is None:
+            return masks
+        seg_pred = cur_result[0].cpu().numpy().astype(np.uint8)
+        cate_label = cur_result[1].cpu().numpy().astype(np.int)
+        cate_score = cur_result[2].cpu().numpy().astype(np.float)
+        num_ins = seg_pred.shape[0]
+        for idx in range(num_ins):
+            cur_mask = seg_pred[idx, ...]
+            rle = mask_util.encode(
+                np.array(cur_mask[:, :, np.newaxis], order='F'))[0]
+            rst = (rle, cate_score[idx])
+            masks[cate_label[idx]].append(rst)
+
+        return masks
 
 
 class DistEvalHook(Hook):
@@ -125,6 +145,82 @@ class CocoDistEvalmAPHook(DistEvalHook):
 
         res_types = ['bbox', 'segm'
                      ] if runner.model.module.with_mask else ['bbox']
+        cocoGt = self.dataset.coco
+        imgIds = cocoGt.getImgIds()
+        for res_type in res_types:
+            try:
+                cocoDt = cocoGt.loadRes(result_files[res_type])
+            except IndexError:
+                print('No prediction found.')
+                break
+            iou_type = res_type
+            cocoEval = COCOeval(cocoGt, cocoDt, iou_type)
+            cocoEval.params.imgIds = imgIds
+            cocoEval.evaluate()
+            cocoEval.accumulate()
+            cocoEval.summarize()
+            metrics = ['mAP', 'mAP_50', 'mAP_75', 'mAP_s', 'mAP_m', 'mAP_l']
+            for i in range(len(metrics)):
+                key = '{}_{}'.format(res_type, metrics[i])
+                val = float('{:.3f}'.format(cocoEval.stats[i]))
+                runner.log_buffer.output[key] = val
+            runner.log_buffer.output['{}_mAP_copypaste'.format(res_type)] = (
+                '{ap[0]:.3f} {ap[1]:.3f} {ap[2]:.3f} {ap[3]:.3f} '
+                '{ap[4]:.3f} {ap[5]:.3f}').format(ap=cocoEval.stats[:6])
+        runner.log_buffer.ready = True
+        for res_type in res_types:
+            os.remove(result_files[res_type])
+
+
+class CocoDistEvalmAPHook_segm(DistEvalHook):
+
+    def after_train_epoch(self, runner):
+        if not self.every_n_epochs(runner, self.interval):
+            return
+        runner.model.eval()
+        results = [None for _ in range(len(self.dataset))]
+        if runner.rank == 0:
+            prog_bar = mmcv.ProgressBar(len(self.dataset))
+        for idx in range(runner.rank, len(self.dataset), runner.world_size):
+            data = self.dataset[idx]
+            data_gpu = scatter(
+                collate([data], samples_per_gpu=1),
+                [torch.cuda.current_device()])[0]
+
+            # compute output
+            with torch.no_grad():
+                result = runner.model(
+                    return_loss=False, rescale=True, **data_gpu)
+            result = get_masks(result, num_classes=len(self.dataset.CLASSES))
+            results[idx] = result
+
+            batch_size = runner.world_size
+            if runner.rank == 0:
+                for _ in range(batch_size):
+                    prog_bar.update()
+
+        if runner.rank == 0:
+            print('\n')
+            dist.barrier()
+            for i in range(1, runner.world_size):
+                tmp_file = osp.join(runner.work_dir, 'temp_{}.pkl'.format(i))
+                tmp_results = mmcv.load(tmp_file)
+                for idx in range(i, len(results), runner.world_size):
+                    results[idx] = tmp_results[idx]
+                os.remove(tmp_file)
+            self.evaluate(runner, results)
+        else:
+            tmp_file = osp.join(runner.work_dir,
+                                'temp_{}.pkl'.format(runner.rank))
+            mmcv.dump(results, tmp_file)
+            dist.barrier()
+        dist.barrier()
+
+    def evaluate(self, runner, results):
+        tmp_file = osp.join(runner.work_dir, 'temp_0')
+        result_files = results2json_segm(self.dataset, results, tmp_file)
+
+        res_types = ['segm']
         cocoGt = self.dataset.coco
         imgIds = cocoGt.getImgIds()
         for res_type in res_types:

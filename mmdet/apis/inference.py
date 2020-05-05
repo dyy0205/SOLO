@@ -14,6 +14,7 @@ from mmdet.models import build_detector
 
 import cv2
 from scipy import ndimage
+import time
 
 def init_detector(config, checkpoint=None, device='cuda:0'):
     """Initialize a detector from config file.
@@ -85,8 +86,12 @@ def inference_detector(model, img):
     data = scatter(collate([data], samples_per_gpu=1), [device])[0]
     # forward the model
     with torch.no_grad():
+        torch.cuda.synchronize()
+        st = time.time()
         result = model(return_loss=False, rescale=True, **data)
-    return result
+        torch.cuda.synchronize()
+        cost_time = time.time() - st
+    return result, cost_time
 
 
 async def async_inference_detector(model, img):

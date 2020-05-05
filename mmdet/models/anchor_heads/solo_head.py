@@ -285,7 +285,7 @@ class SOLOHead(nn.Module):
 
                 top = max(top_box, coord_h-1)
                 down = min(down_box, coord_h+1)
-                left = max(coord_w-1, left_box)
+                left = max(left_box, coord_w-1)
                 right = min(right_box, coord_w+1)
 
                 cate_label[top:(down+1), left:(right+1)] = gt_label
