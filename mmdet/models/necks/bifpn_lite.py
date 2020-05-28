@@ -1,8 +1,6 @@
 import torch
 from torch import nn
 from mmcv.cnn import xavier_init
-from mmdet.utils import get_root_logger
-from mmcv.runner import load_checkpoint
 from ..registry import NECKS
 
 
