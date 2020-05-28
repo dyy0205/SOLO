@@ -162,12 +162,11 @@ class SOLOAttentionHead(nn.Module):
         self.solo_cate = nn.Conv2d(
             self.seg_feat_channels, self.cate_out_channels, 3, padding=1)
 
-        self.solo_kernel = nn.ModuleList()
+        self.solo_kernel = nn.Conv2d(
+            self.seg_feat_channels, 1, 1, padding=0)
+
         self.solo_mask = nn.ModuleList()
         for seg_num_grid in self.seg_num_grids:
-            self.solo_kernel.append(
-                nn.Conv2d(
-                    self.seg_feat_channels, 1, 1, padding=0))
             self.solo_mask.append(
                 nn.Conv2d(
                     self.seg_feat_channels, seg_num_grid ** 2, 1, padding=0))
@@ -200,6 +199,7 @@ class SOLOAttentionHead(nn.Module):
             x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
         kernel_feat = x
         cate_feat = x
+        seg_num_grid = self.seg_num_grids[idx]
 
         # kernel branch
         # concat coord
@@ -213,23 +213,20 @@ class SOLOAttentionHead(nn.Module):
 
         for i, kernel_layer in enumerate(self.kernel_convs):
             if i == self.cate_down_pos:
-                seg_num_grid = self.seg_num_grids[idx]
                 kernel_feat = F.interpolate(kernel_feat, size=seg_num_grid, mode='bilinear', align_corners=True)
             kernel_feat = kernel_layer(kernel_feat)
-        kernel_pred = self.solo_kernel[idx](kernel_feat)  # [N, 1, s, s]
+        kernel_pred = self.solo_kernel(kernel_feat)  # [N, 1, s, s]
         kernel_pred = kernel_pred.view(kernel_pred.shape[0], -1).unsqueeze(-1).unsqueeze(-1)  # [N, s*s, 1, 1]
 
         # feature branch
-        for i, feat_layer in enumerate(self.feature_convs):
-            feature_feat = feat_layer(feature_feat)
-        feature_feat = self.solo_mask[idx](feature_feat)  # [N, s*s, h, w]
+        feature_feat = self.feature_convs[idx](feature_feat)
+        feature_pred = self.solo_mask[idx](feature_feat)  # [N, s*s, h, w]
 
-        ins_pred = feature_feat.mul(kernel_pred)
+        ins_pred = feature_pred.mul(kernel_pred)
 
         # cate branch
         for i, cate_layer in enumerate(self.cate_convs):
             if i == self.cate_down_pos:
-                seg_num_grid = self.seg_num_grids[idx]
                 cate_feat = F.interpolate(cate_feat, size=seg_num_grid, mode='bilinear', align_corners=True)
             cate_feat = cate_layer(cate_feat)
         cate_pred = self.solo_cate(cate_feat)

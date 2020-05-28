@@ -79,7 +79,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    imgs_per_gpu=14,
+    imgs_per_gpu=16,
     workers_per_gpu=4,
     train=dict(
         type=dataset_type,
