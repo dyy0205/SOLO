@@ -2,16 +2,16 @@ from mmdet.apis import init_detector, inference_detector, show_result_pyplot, sh
 import mmcv
 import os, glob, time
 
-config_file = 'cfg/solov2_lite3_bifpn.py'
+config_file = 'cfg/solov2_bn_contour.py'
 # download the checkpoint from model zoo and put it in `checkpoints/`
-checkpoint_file = 'work_dirs/solov2_lite3_bifpn_instaboost/epoch_9.pth'
+checkpoint_file = './work_dirs/solov2_bn_contour/epoch_9.pth'
 
 # build the model from a config file and a checkpoint file
 model = init_detector(config_file, checkpoint_file, device='cuda:0')
 
 # test a single image
 imgs = glob.glob('../coco/test/*.*')
-save_dir = '../coco/insta'
+save_dir = '../coco/contour'
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 

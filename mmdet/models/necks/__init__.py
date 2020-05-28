@@ -4,6 +4,5 @@ from .hrfpn import HRFPN
 from .nas_fpn import NASFPN
 from .bifpn import BiFPN
 from .bifpn_lite import BiFPN_Lite
-from .fpn_lite import FPNLite
 
-__all__ = ['FPN', 'BFP', 'HRFPN', 'NASFPN', 'BiFPN', 'BiFPN_Lite', 'FPNLite']
+__all__ = ['FPN', 'BFP', 'HRFPN', 'NASFPN', 'BiFPN', 'BiFPN_Lite']

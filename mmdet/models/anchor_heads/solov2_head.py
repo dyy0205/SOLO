@@ -3,39 +3,45 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.cnn import normal_init
-from mmdet.ops import DeformConv, roi_align
-from mmdet.core import multi_apply, bbox2roi, matrix_nms, force_fp32
+from mmdet.core import multi_apply, matrix_nms
 from ..builder import build_loss
 from ..registry import HEADS
 from ..utils import bias_init_with_prob, ConvModule
 
-INF = 1e8
-
 from scipy import ndimage
+import numpy as np
+import cv2
+from scipy.ndimage import distance_transform_edt as distance
 
 
-def points_nms(heat, kernel=2, fp16=False):
+def points_nms(heat, kernel=2):
     # kernel must be 2
     hmax = nn.functional.max_pool2d(
         heat, (kernel, kernel), stride=1, padding=1)
-    if fp16:
-        keep = (hmax[:, :, :-1, :-1] == heat).half()
-    else:
-        keep = (hmax[:, :, :-1, :-1] == heat).float()
+    keep = (hmax[:, :, :-1, :-1] == heat).float()
     return heat * keep
 
 
-def dice_loss(input, target, fp16=False):
+def dice_loss(input, target):
     input = input.contiguous().view(input.size()[0], -1)
-    if fp16:
-        target = target.contiguous().view(target.size()[0], -1).half()
-    else:
-        target = target.contiguous().view(target.size()[0], -1).float()
+    target = target.contiguous().view(target.size()[0], -1).float()
 
     a = torch.sum(input * target, 1)
     b = torch.sum(input * input, 1) + 0.001
     c = torch.sum(target * target, 1) + 0.001
     d = (2 * a) / (b + c)
+    return 1 - d
+
+
+def generalized_dice_loss(input, target):
+    input = input.contiguous().view(input.size()[0], -1)
+    target = target.contiguous().view(target.size()[0], -1).float()
+
+    a = torch.sum(input * target, 1)
+    b = torch.sum(input * input, 1) + 0.001
+    c = torch.sum(target * target, 1) + 0.001
+    w = 1 / c ** 2
+    d = (2 * w * a) / (b + w * c)
     return 1 - d
 
 
@@ -53,12 +59,12 @@ class SOLOV2Head(nn.Module):
                  sigma=0.4,
                  num_grids=None,
                  cate_down_pos=0,
-                 with_deform=False,
+                 with_contour=False,
                  loss_ins=None,
                  loss_cate=None,
+                 loss_contour=None,
                  conv_cfg=None,
-                 norm_cfg=None,
-                 fp16_training=False):
+                 norm_cfg=None):
         super(SOLOV2Head, self).__init__()
         self.num_classes = num_classes
         self.seg_num_grids = num_grids
@@ -71,16 +77,17 @@ class SOLOV2Head(nn.Module):
         self.cate_down_pos = cate_down_pos
         self.base_edge_list = base_edge_list
         self.scale_ranges = scale_ranges
-        self.with_deform = with_deform
+        self.with_contour = with_contour
         self.loss_cate = build_loss(loss_cate)
         self.ins_loss_weight = loss_ins['loss_weight']
+        self.loss_contour = build_loss(loss_contour) if self.with_contour else None
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
-        self.fp16_training = fp16_training
         self._init_layers()
 
     def _init_layers(self):
-        norm_cfg = dict(type='GN', num_groups=32, requires_grad=True)
+        # norm_cfg = dict(type='GN', num_groups=32, requires_grad=True)
+        norm_cfg = dict(type='BN', requires_grad=True)
         self.feature_convs = nn.ModuleList()
         self.kernel_convs = nn.ModuleList()
         self.cate_convs = nn.ModuleList()
@@ -116,7 +123,7 @@ class SOLOV2Head(nn.Module):
                         bias=norm_cfg is None)
                     convs_per_level.add_module('conv' + str(j), one_conv)
                     one_upsample = nn.Upsample(
-                        scale_factor=2, mode='bilinear', align_corners=False)
+                        scale_factor=2, mode='bilinear', align_corners=True)
                     convs_per_level.add_module('upsample' + str(j), one_upsample)
                     continue
                 one_conv = ConvModule(
@@ -129,7 +136,7 @@ class SOLOV2Head(nn.Module):
                     bias=norm_cfg is None)
                 convs_per_level.add_module('conv' + str(j), one_conv)
                 one_upsample = nn.Upsample(
-                    scale_factor=2, mode='bilinear', align_corners=False)
+                    scale_factor=2, mode='bilinear', align_corners=True)
                 convs_per_level.add_module('upsample' + str(j), one_upsample)
             self.feature_convs.append(convs_per_level)
 
@@ -179,7 +186,6 @@ class SOLOV2Head(nn.Module):
     def forward(self, feats, eval=False):
         new_feats = self.split_feats(feats)
         featmap_sizes = [featmap.size()[-2:] for featmap in new_feats]
-        upsampled_size = (feats[0].shape[-2], feats[0].shape[-3])
         kernel_pred, cate_pred = multi_apply(self.forward_single, new_feats,
                                              list(range(len(self.seg_num_grids))),
                                              eval=eval)
@@ -189,10 +195,7 @@ class SOLOV2Head(nn.Module):
         y, x = torch.meshgrid(y_range, x_range)
         y = y.expand([feats[-2].shape[0], 1, -1, -1])
         x = x.expand([feats[-2].shape[0], 1, -1, -1])
-        if self.fp16_training:
-            coord_feat = torch.cat([x, y], 1).half()
-        else:
-            coord_feat = torch.cat([x, y], 1)
+        coord_feat = torch.cat([x, y], 1)
 
         feature_add_all_level = self.feature_convs[0](feats[0])
         for i in range(1, 3):
@@ -236,10 +239,7 @@ class SOLOV2Head(nn.Module):
         y, x = torch.meshgrid(y_range, x_range)
         y = y.expand([kernel_feat.shape[0], 1, -1, -1])
         x = x.expand([kernel_feat.shape[0], 1, -1, -1])
-        if self.fp16_training:
-            coord_feat = torch.cat([x, y], 1).half()
-        else:
-            coord_feat = torch.cat([x, y], 1)
+        coord_feat = torch.cat([x, y], 1)
         kernel_feat = torch.cat([kernel_feat, coord_feat], 1)
 
         for i, kernel_layer in enumerate(self.kernel_convs):
@@ -259,10 +259,9 @@ class SOLOV2Head(nn.Module):
         cate_pred = self.solo_cate(cate_feat)
 
         if eval:
-            cate_pred = points_nms(cate_pred.sigmoid(), kernel=2, fp16=self.fp16_training).permute(0, 2, 3, 1)
+            cate_pred = points_nms(cate_pred.sigmoid(), kernel=2).permute(0, 2, 3, 1)
         return kernel_pred, cate_pred
 
-    @force_fp32(apply_to=('ins_preds', 'cate_preds'))
     def loss(self,
              ins_preds,
              cate_preds,
@@ -280,7 +279,8 @@ class SOLOV2Head(nn.Module):
             gt_label_list,
             gt_mask_list,
             featmap_sizes=featmap_sizes)
-        # ins
+
+        # ins branch
         ins_labels = [torch.cat([ins_labels_level_img[ins_ind_labels_level_img, ...]
                                  for ins_labels_level_img, ins_ind_labels_level_img in
                                  zip(ins_labels_level, ins_ind_labels_level)], 0)
@@ -297,7 +297,6 @@ class SOLOV2Head(nn.Module):
             for ins_ind_labels_level in zip(*ins_ind_label_list)
         ]
         flatten_ins_ind_labels = torch.cat(ins_ind_labels)
-
         num_ins = flatten_ins_ind_labels.int().sum()
 
         # dice loss
@@ -306,11 +305,11 @@ class SOLOV2Head(nn.Module):
             if input.size()[0] == 0:
                 continue
             input = torch.sigmoid(input)
-            loss_ins.append(dice_loss(input, target, fp16=self.fp16_training))
+            loss_ins.append(dice_loss(input, target))
         loss_ins = torch.cat(loss_ins).mean()
         loss_ins = loss_ins * self.ins_loss_weight
 
-        # cate
+        # cate branch
         cate_labels = [
             torch.cat([cate_labels_level_img.flatten()
                        for cate_labels_level_img in cate_labels_level])
@@ -325,9 +324,59 @@ class SOLOV2Head(nn.Module):
         flatten_cate_preds = torch.cat(cate_preds)
 
         loss_cate = self.loss_cate(flatten_cate_preds, flatten_cate_labels, avg_factor=num_ins + 1)
-        return dict(
-            loss_ins=loss_ins,
-            loss_cate=loss_cate)
+
+        # contour loss
+        def _mask_contour(mask, thickness=1):
+            device = mask.device
+            h, w = mask.shape
+            _mask = mask.cpu().detach().numpy()
+            _mask[_mask == 1] = 255
+            cnts, hierarchy = cv2.findContours(_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            if len(cnts) != 0:
+                contour = np.zeros((h, w, 3))
+                contour = cv2.drawContours(contour, cnts, -1, (255, 255, 255), thickness).astype('uint8')
+                contour = cv2.cvtColor(contour, cv2.COLOR_BGR2GRAY)
+                contour = torch.from_numpy((contour / 255).astype('uint8')).to(device)
+                return contour
+            else:
+                return torch.zeros_like(mask)
+
+        if self.with_contour:
+            cnt_labels = []
+            for level_masks in ins_labels:
+                if level_masks.shape[0] == 0:
+                    continue
+                cnt_labels.append(
+                    torch.cat([_mask_contour(mask).flatten().long() for mask in level_masks])
+                )
+            flatten_cnt_labels = torch.cat(cnt_labels)
+
+            cnt_preds = []
+            for level_masks in ins_preds:
+                if level_masks.shape[0] == 0:
+                    continue
+                cnt_preds.append(
+                    torch.cat([_mask_contour(torch.sigmoid(mask) >= 0.5).flatten().float() for mask in level_masks])
+                )
+            flatten_cnt_preds = torch.cat(cnt_preds).unsqueeze(-1)
+
+            loss_contour = self.loss_contour(flatten_cnt_preds, flatten_cnt_labels)
+            # print(loss_contour)
+
+            # loss_contour = []
+            # for preds, labels in zip(ins_preds, ins_labels):
+            #     if preds.size()[0] == 0 or labels.size()[0] == 0:
+            #         continue
+            #     cnt_labels = torch.stack([_mask_contour(mask) for mask in labels]).float()
+            #     cnt_preds = torch.sigmoid(preds) * cnt_labels
+            #     loss_cnt = self.loss_contour(cnt_preds, cnt_labels)
+            #     loss_contour.append(loss_cnt)
+            # loss_contour = torch.stack(loss_contour).mean()
+            # print(loss_contour)
+
+            return dict(loss_ins=loss_ins, loss_cate=loss_cate, loss_contour=loss_contour)
+        else:
+            return dict(loss_ins=loss_ins, loss_cate=loss_cate)
 
     def solo_target_single(self,
                            gt_bboxes_raw,
@@ -400,7 +449,6 @@ class SOLOV2Head(nn.Module):
             ins_ind_label_list.append(ins_ind_label)
         return ins_label_list, cate_label_list, ins_ind_label_list
 
-    @force_fp32(apply_to=('seg_preds', 'cate_preds'))
     def get_seg(self,
                 seg_preds,
                 cate_preds,
@@ -468,11 +516,7 @@ class SOLOV2Head(nn.Module):
         # masks.
         seg_preds = seg_preds[inds[:, 0]]
         seg_masks = seg_preds > cfg.mask_thr
-        if self.fp16_training:
-            sum_masks = seg_masks.sum((1, 2)).half()
-            strides = strides.half()
-        else:
-            sum_masks = seg_masks.sum((1, 2)).float()
+        sum_masks = seg_masks.sum((1, 2)).float()
 
         # filter.
         keep = sum_masks > strides
@@ -486,10 +530,7 @@ class SOLOV2Head(nn.Module):
         cate_labels = cate_labels[keep]
 
         # mask scoring.
-        if self.fp16_training:
-            seg_scores = (seg_preds * seg_masks.half()).sum((1, 2)) / sum_masks
-        else:
-            seg_scores = (seg_preds * seg_masks.float()).sum((1, 2)) / sum_masks
+        seg_scores = (seg_preds * seg_masks.float()).sum((1, 2)) / sum_masks
         cate_scores *= seg_scores
 
         # sort and keep top nms_pre
@@ -504,8 +545,7 @@ class SOLOV2Head(nn.Module):
 
         # Matrix NMS
         cate_scores = matrix_nms(seg_masks, cate_labels, cate_scores,
-                                 kernel=cfg.kernel, sigma=cfg.sigma, sum_masks=sum_masks,
-                                 fp16=self.fp16_training)
+                                 kernel=cfg.kernel, sigma=cfg.sigma, sum_masks=sum_masks)
 
         # filter.
         keep = cate_scores >= cfg.update_thr

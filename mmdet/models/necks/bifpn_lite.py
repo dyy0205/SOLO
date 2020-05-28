@@ -1,6 +1,8 @@
 import torch
 from torch import nn
 from mmcv.cnn import xavier_init
+from mmdet.utils import get_root_logger
+from mmcv.runner import load_checkpoint
 from ..registry import NECKS
 
 
@@ -22,7 +24,7 @@ class SeparableConvBlock(nn.Module):
     created by Zylo117
     """
 
-    def __init__(self, in_channels, out_channels=None, norm=True, activation=False):
+    def __init__(self, in_channels, out_channels=None, norm=True, activation=False, freeze_params=False):
         super(SeparableConvBlock, self).__init__()
         if out_channels is None:
             out_channels = in_channels
@@ -45,6 +47,12 @@ class SeparableConvBlock(nn.Module):
         if self.activation:
             self.relu = nn.ReLU()
 
+        self.freeze_params = freeze_params
+        if self.freeze_params:
+            for m in [self.depthwise_conv, self.pointwise_conv, self.bn]:
+                for param in m.parameters():
+                    param.requires_grad = False
+
     def forward(self, x):
         x = self.depthwise_conv(x)
         x = self.pointwise_conv(x)
@@ -65,7 +73,8 @@ class SingleBiFPN(nn.Module):
                  out_channels,
                  first_block=False,
                  epsilon=1e-4,
-                 attention=True):
+                 attention=True,
+                 freeze_params=False):
         """
         Args:
             first_block: whether the input comes directly from the efficientnet,
@@ -77,6 +86,7 @@ class SingleBiFPN(nn.Module):
         self.first_block = first_block
         self.epsilon = epsilon
         self.attention = attention
+        self.freeze_params = freeze_params
 
         if self.first_block:
             self.p2_down_channel = nn.Sequential(
@@ -116,14 +126,14 @@ class SingleBiFPN(nn.Module):
             )
 
         # Conv layers
-        self.conv5_up = SeparableConvBlock(out_channels)
-        self.conv4_up = SeparableConvBlock(out_channels)
-        self.conv3_up = SeparableConvBlock(out_channels)
-        self.conv2_up = SeparableConvBlock(out_channels)
-        self.conv3_down = SeparableConvBlock(out_channels)
-        self.conv4_down = SeparableConvBlock(out_channels)
-        self.conv5_down = SeparableConvBlock(out_channels)
-        self.conv6_down = SeparableConvBlock(out_channels)
+        self.conv5_up = SeparableConvBlock(out_channels, freeze_params=self.freeze_params)
+        self.conv4_up = SeparableConvBlock(out_channels, freeze_params=self.freeze_params)
+        self.conv3_up = SeparableConvBlock(out_channels, freeze_params=self.freeze_params)
+        self.conv2_up = SeparableConvBlock(out_channels, freeze_params=self.freeze_params)
+        self.conv3_down = SeparableConvBlock(out_channels, freeze_params=self.freeze_params)
+        self.conv4_down = SeparableConvBlock(out_channels, freeze_params=self.freeze_params)
+        self.conv5_down = SeparableConvBlock(out_channels, freeze_params=self.freeze_params)
+        self.conv6_down = SeparableConvBlock(out_channels, freeze_params=self.freeze_params)
 
         # top-down (upsample to target phase's by nearest interpolation)
         self.p5_upsample = nn.Upsample(scale_factor=2, mode='nearest')
@@ -140,23 +150,30 @@ class SingleBiFPN(nn.Module):
         self.relu = nn.ReLU()
 
         # Weight
-        self.p5_w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
+        self.p5_w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=False if self.freeze_params else True)
         self.p5_w1_relu = nn.ReLU()
-        self.p4_w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
+        self.p4_w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=False if self.freeze_params else True)
         self.p4_w1_relu = nn.ReLU()
-        self.p3_w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
+        self.p3_w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=False if self.freeze_params else True)
         self.p3_w1_relu = nn.ReLU()
-        self.p2_w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
+        self.p2_w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=False if self.freeze_params else True)
         self.p2_w1_relu = nn.ReLU()
 
-        self.p3_w2 = nn.Parameter(torch.ones(3, dtype=torch.float32), requires_grad=True)
+        self.p3_w2 = nn.Parameter(torch.ones(3, dtype=torch.float32), requires_grad=False if self.freeze_params else True)
         self.p3_w2_relu = nn.ReLU()
-        self.p4_w2 = nn.Parameter(torch.ones(3, dtype=torch.float32), requires_grad=True)
+        self.p4_w2 = nn.Parameter(torch.ones(3, dtype=torch.float32), requires_grad=False if self.freeze_params else True)
         self.p4_w2_relu = nn.ReLU()
-        self.p5_w2 = nn.Parameter(torch.ones(3, dtype=torch.float32), requires_grad=True)
+        self.p5_w2 = nn.Parameter(torch.ones(3, dtype=torch.float32), requires_grad=False if self.freeze_params else True)
         self.p5_w2_relu = nn.ReLU()
-        self.p6_w2 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
+        self.p6_w2 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=False if self.freeze_params else True)
         self.p6_w2_relu = nn.ReLU()
+
+        if self.freeze_params:
+            for m in [self.p2_down_channel, self.p3_down_channel, self.p4_down_channel,
+                      self.p5_down_channel, self.p5_to_p6, self.p3_down_channel_2,
+                      self.p4_down_channel_2, self.p5_down_channel_2]:
+                for param in m.parameters():
+                    param.requires_grad = False
 
     def forward(self, inputs):
         """
@@ -308,7 +325,8 @@ class BiFPN_Lite(nn.Module):
     def __init__(self,
                  compound_coef=0,
                  num_repeats=None,
-                 out_channels=None):
+                 out_channels=None,
+                 freeze_params=False):
         super(BiFPN_Lite, self).__init__()
         self.compound_coef = compound_coef
         self.input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536]
@@ -327,12 +345,14 @@ class BiFPN_Lite(nn.Module):
         }
         self.num_repeats = num_repeats if num_repeats is not None else self.fpn_cell_repeats[compound_coef]
         self.out_channels = out_channels if out_channels is not None else self.fpn_num_filters[self.compound_coef]
+        self.freeze_params = freeze_params
 
         self.bifpn = nn.Sequential(
             *[SingleBiFPN(in_channels=self.conv_channel_coef[compound_coef],
                           out_channels=self.out_channels,
                           first_block=True if _ == 0 else False,
-                          attention=True if compound_coef < 6 else False)
+                          attention=True if compound_coef < 6 else False,
+                          freeze_params=self.freeze_params)
               for _ in range(self.num_repeats)])
 
     def init_weights(self):

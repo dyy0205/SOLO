@@ -6,6 +6,9 @@ import pycocotools.mask as maskUtils
 
 from ..registry import PIPELINES
 
+import cv2
+import torch
+
 
 @PIPELINES.register_module
 class LoadImageFromFile(object):
@@ -78,6 +81,19 @@ class LoadAnnotations(object):
             rle = mask_ann
         mask = maskUtils.decode(rle)
         return mask
+
+    def _contour_mask(self, mask, h, w, thickness=1):
+        _mask = mask
+        _mask[_mask == 1] = 255
+        cnts, hierarchy = cv2.findContours(_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        if len(cnts) != 0:
+            contour = np.zeros((h, w, 3))
+            contour = cv2.drawContours(contour, cnts, -1, (255, 255, 255), thickness).astype('uint8')
+            contour = cv2.cvtColor(contour, cv2.COLOR_BGR2GRAY)
+            contour = (contour / 255).astype('uint8')
+            return contour
+        else:
+            return np.zeros_like(mask)
 
     def _load_masks(self, results):
         h, w = results['img_info']['height'], results['img_info']['width']
