@@ -214,7 +214,7 @@ class SOLOAttentionHead(nn.Module):
         for i, kernel_layer in enumerate(self.kernel_convs):
             if i == self.cate_down_pos:
                 kernel_feat = F.interpolate(kernel_feat, size=seg_num_grid, mode='bilinear', align_corners=True)
-            kernel_feat = kernel_layer(kernel_feat)
+            kernel_feat = kernel_layer(kernel_feat)  # [N, c, s, s]
         kernel_pred = self.solo_kernel(kernel_feat)  # [N, 1, s, s]
         kernel_pred = kernel_pred.view(kernel_pred.shape[0], -1).unsqueeze(-1).unsqueeze(-1)  # [N, s*s, 1, 1]
 
