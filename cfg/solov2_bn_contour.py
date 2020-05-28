@@ -1,5 +1,3 @@
-# fp16 settings
-# fp16 = dict(loss_scale=512.)
 # model settings
 model = dict(
     type='SOLO',
@@ -26,13 +24,18 @@ model = dict(
         sigma=0.2,
         num_grids=[40, 36, 24, 16, 12],
         cate_down_pos=0,
-        with_deform=False,
-        # fp16_training=True,
+        with_contour=True,
         loss_ins=dict(
             type='DiceLoss',
             use_sigmoid=True,
             loss_weight=3.0),
         loss_cate=dict(
+            type='FocalLoss',
+            use_sigmoid=True,
+            gamma=2.0,
+            alpha=0.25,
+            loss_weight=1.0),
+        loss_contour=dict(
             type='FocalLoss',
             use_sigmoid=True,
             gamma=2.0,
@@ -56,26 +59,11 @@ img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 train_pipeline = [
     dict(type='LoadImageFromFile'),
-    # dict(
-    #     type='InstaBoost',
-    #     action_candidate=('normal', 'horizontal', 'skip'),
-    #     action_prob=(1, 0, 0),
-    #     scale=(0.8, 1.2),
-    #     dx=15,
-    #     dy=15,
-    #     theta=(-1, 1),
-    #     color_prob=0.5,
-    #     hflag=False,
-    #     aug_ratio=0.5),
     dict(type='LoadAnnotations', with_bbox=True, with_mask=True),
-    # dict(type='Resizer', img_scale=[832, 768, 704, 640, 576, 512]),
     dict(type='Resize',
          img_scale=[(832, 512), (832, 448), (832, 384)],
-         # img_scale=[(832, 832), (768, 768), (704, 704),
-         #            (640, 640), (576, 576), (512, 512)],
          multiscale_mode='value',
          keep_ratio=False),
-    # dict(type='RandomCrop', crop_size=(384, 384)),
     dict(type='RandomFlip', flip_ratio=0.5),
     dict(type='Normalize', **img_norm_cfg),
     dict(type='Pad', size_divisor=32),
@@ -90,7 +78,6 @@ test_pipeline = [
         flip=False,
         transforms=[
             dict(type='Resize', keep_ratio=False),
-            # dict(type='Resizer'),
             dict(type='RandomFlip'),
             dict(type='Normalize', **img_norm_cfg),
             dict(type='Pad', size_divisor=32),
@@ -99,7 +86,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    imgs_per_gpu=24,
+    imgs_per_gpu=20,
     workers_per_gpu=4,
     train=dict(
         type=dataset_type,
@@ -140,7 +127,7 @@ total_epochs = 12
 device_ids = range(8)
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
-work_dir = './work_dirs/solov2_lite3_bifpn_bn'
+work_dir = './work_dirs/solov2_bn_contour/'
 load_from = None
 resume_from = None
 workflow = [('train', 1)]

@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 
 START_IMAGE_ID = 1
 START_BOUNDING_BOX_ID = 1
-CATEGORIES = {'人物': 1}
+CATEGORIES = {'背景': 0, '人物': 1, "狗": 2}
 
 
 def get(root, name):
@@ -32,7 +32,7 @@ def convert(xml_dir):
     json_dict = {"images": [], "type": "instances", "annotations": [], "categories": []}
     bnd_id = START_BOUNDING_BOX_ID
     image_id = START_IMAGE_ID
-    # categories = []
+    # categories = ['人物', '背景', '天空', '轿车', '其他', '巴士', '狗', '马']
     for i, xml in enumerate(os.listdir(xml_dir)):
         print(i, xml)
         xml_f = os.path.join(xml_dir, xml)
@@ -108,10 +108,10 @@ if __name__ == '__main__':
     #                     name = xml.split('/')[-3][:12] + '_' + xml.split('/')[-1]
     #                     shutil.copy(xml, os.path.join(xml_dir, name))
 
-    xml_dir = '/Users/dyy/Desktop/human/xmls'
+    xml_dir = '/Users/dyy/Desktop/datasets/human/xmls'
     json_dict = convert(xml_dir)
 
-    json_fp = open('/Users/dyy/Desktop/human/out.json', 'w')
+    json_fp = open('/Users/dyy/Desktop/datasets/human/out.json', 'w')
     json_str = json.dumps(json_dict)
     json_fp.write(json_str)
     json_fp.close()
