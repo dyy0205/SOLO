@@ -12,30 +12,24 @@ model = dict(
         type='BiFPN_Lite',  # P2 ~ P6
         compound_coef=3,
         num_repeats=1,
-        out_channels=160),
+        out_channels=160,
+        freeze_params=True),
     bbox_head=dict(
-        type='SOLOV2Head',
+        type='SOLOAttentionHead',
         num_classes=5,
         in_channels=160,
-        stacked_convs=2,
+        stacked_convs=4,
         seg_feat_channels=160,
         strides=[8, 8, 16, 32, 32],
         scale_ranges=((1, 64), (32, 128), (64, 256), (128, 512), (256, 2048)),
         sigma=0.2,
         num_grids=[40, 36, 24, 16, 12],
         cate_down_pos=0,
-        with_contour=True,
         loss_ins=dict(
             type='DiceLoss',
             use_sigmoid=True,
             loss_weight=3.0),
         loss_cate=dict(
-            type='FocalLoss',
-            use_sigmoid=True,
-            gamma=2.0,
-            alpha=0.25,
-            loss_weight=1.0),
-        loss_contour=dict(
             type='FocalLoss',
             use_sigmoid=True,
             gamma=2.0,
@@ -54,7 +48,7 @@ test_cfg = dict(
     max_per_img=100)
 # dataset settings
 dataset_type = 'CocoDataset'
-data_root = '/versa/dyy/coco/'
+data_root = '/home/versa/datasets/MSCOCO/'
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 train_pipeline = [
@@ -86,25 +80,25 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    imgs_per_gpu=20,
+    imgs_per_gpu=16,
     workers_per_gpu=4,
     train=dict(
         type=dataset_type,
         ann_file=data_root + 'train.json',
-        img_prefix='/versa/dataset/COCO2017/coco/train2017/',
+        img_prefix=data_root + 'train2017/',
         pipeline=train_pipeline),
     val=dict(
         type=dataset_type,
         ann_file=data_root + 'val.json',
-        img_prefix=data_root + 'val/',
+        img_prefix=data_root + 'val2017/',
         pipeline=test_pipeline),
     test=dict(
         type=dataset_type,
         ann_file=data_root + 'val.json',
-        img_prefix=data_root + 'val/',
+        img_prefix=data_root + 'val2017/',
         pipeline=test_pipeline))
 # optimizer
-optimizer = dict(type='SGD', lr=0.2, momentum=0.9, weight_decay=0.0001)
+optimizer = dict(type='SGD', lr=0.002, momentum=0.9, weight_decay=0.0001)
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 # learning policy
 lr_config = dict(
@@ -127,7 +121,7 @@ total_epochs = 12
 device_ids = range(8)
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
-work_dir = './work_dirs/solov2_bn_contour/'
-load_from = None
+work_dir = './work_dirs/solo_attention/'
+load_from = './work_dirs/solo_attention/freeze_backbone_neck_epoch_12.pth'
 resume_from = None
 workflow = [('train', 1)]
