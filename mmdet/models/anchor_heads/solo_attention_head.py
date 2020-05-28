@@ -137,7 +137,6 @@ class SOLOAttentionHead(nn.Module):
 
         for i in range(self.stacked_convs):
             chn = self.in_channels + 2 if i == 0 else self.seg_feat_channels
-
             self.kernel_convs.append(
                 ConvModule(
                     chn,
