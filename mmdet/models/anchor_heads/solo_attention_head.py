@@ -231,6 +231,7 @@ class SOLOAttentionHead(nn.Module):
         cate_pred = self.solo_cate(cate_feat)
 
         if eval:
+            ins_pred = ins_pred.sigmoid()
             cate_pred = points_nms(cate_pred.sigmoid(), kernel=2).permute(0, 2, 3, 1)
         return ins_pred, cate_pred
 
