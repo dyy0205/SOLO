@@ -30,9 +30,9 @@ def showAnns(json_file, img_dir, mask_dir):
 
 
 if __name__ == '__main__':
-    json_file = '/Users/dyy/Desktop/datasets/human/out.json'
-    img_dir = '/Users/dyy/Desktop/datasets/human/images/'
-    mask_dir = '/Users/dyy/Desktop/datasets/human/mask/'
+    json_file = '/Users/dyy/Desktop/datasets/seg/train.json'
+    img_dir = '/Users/dyy/Desktop/datasets/seg/JPEGimages'
+    mask_dir = '/Users/dyy/Desktop/datasets/seg/mask'
     if os.path.exists(mask_dir):
         shutil.rmtree(mask_dir)
     os.makedirs(mask_dir)

@@ -33,6 +33,17 @@ def dice_loss(input, target):
     return 1 - d
 
 
+def balanced_bce_loss(input, target):
+    pos = target.eq(1).float()
+    neg = target.eq(0).float()
+    num_pos = pos.sum()
+    num_neg = neg.sum()
+    alpha_pos = num_neg / (num_pos + num_neg)
+    alpha_neg = num_pos / (num_pos + num_neg)
+    weights = alpha_pos * pos + alpha_neg * neg
+    return F.binary_cross_entropy_with_logits(input, target.float(), weights, reduction='mean')
+
+
 @HEADS.register_module
 class SOLOHead(nn.Module):
 
@@ -49,6 +60,7 @@ class SOLOHead(nn.Module):
                  cate_down_pos=0,
                  with_deform=False,
                  loss_ins=None,
+                 loss_mask=None,
                  loss_cate=None,
                  conv_cfg=None,
                  norm_cfg=None,
@@ -68,6 +80,7 @@ class SOLOHead(nn.Module):
         self.with_deform = with_deform
         self.loss_cate = build_loss(loss_cate)
         self.ins_loss_weight = loss_ins['loss_weight']
+        self.mask_loss_weight = loss_mask['loss_weight']
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
         self.with_attention = with_attention
@@ -232,13 +245,17 @@ class SOLOHead(nn.Module):
 
         # dice loss
         loss_ins = []
+        loss_mask = 0
         for input, target in zip(ins_preds, ins_labels):
             if input.size()[0] == 0:
                 continue
+            loss_mask += balanced_bce_loss(input, target)
             input = torch.sigmoid(input)
             loss_ins.append(dice_loss(input, target))
         loss_ins = torch.cat(loss_ins).mean()
         loss_ins = loss_ins * self.ins_loss_weight
+        loss_mask /= len(ins_labels)
+        loss_mask = loss_mask * self.mask_loss_weight
 
         # cate
         cate_labels = [
@@ -257,6 +274,7 @@ class SOLOHead(nn.Module):
         loss_cate = self.loss_cate(flatten_cate_preds, flatten_cate_labels, avg_factor=num_ins + 1)
         return dict(
             loss_ins=loss_ins,
+            loss_mask=loss_mask,
             loss_cate=loss_cate)
 
     def solo_target_single(self,

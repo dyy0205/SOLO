@@ -96,7 +96,8 @@ class SOLOAttentionHead(nn.Module):
             convs_per_level = nn.Sequential()
             if i == 0:
                 one_conv = ConvModule(
-                    self.in_channels,
+                    # self.in_channels,
+                    self.in_channels + 2,
                     self.seg_feat_channels,
                     3,
                     padding=1,
@@ -109,7 +110,8 @@ class SOLOAttentionHead(nn.Module):
             for j in range(i):
                 if j == 0:
                     one_conv = ConvModule(
-                        self.in_channels,
+                        # self.in_channels,
+                        self.in_channels + 2,
                         self.seg_feat_channels,
                         3,
                         padding=1,
@@ -200,28 +202,39 @@ class SOLOAttentionHead(nn.Module):
         cate_feat = x
         seg_num_grid = self.seg_num_grids[idx]
 
-        # kernel branch
-        # concat coord
-        x_range = torch.linspace(-1, 1, kernel_feat.shape[-1], device=kernel_feat.device)
-        y_range = torch.linspace(-1, 1, kernel_feat.shape[-2], device=kernel_feat.device)
+        # # kernel branch
+        # # concat coord
+        # x_range = torch.linspace(-1, 1, kernel_feat.shape[-1], device=kernel_feat.device)
+        # y_range = torch.linspace(-1, 1, kernel_feat.shape[-2], device=kernel_feat.device)
+        # y, x = torch.meshgrid(y_range, x_range)
+        # y = y.expand([kernel_feat.shape[0], 1, -1, -1])
+        # x = x.expand([kernel_feat.shape[0], 1, -1, -1])
+        # coord_feat = torch.cat([x, y], 1)
+        # kernel_feat = torch.cat([kernel_feat, coord_feat], 1)
+        #
+        # for i, kernel_layer in enumerate(self.kernel_convs):
+        #     if i == self.cate_down_pos:
+        #         kernel_feat = F.interpolate(kernel_feat, size=seg_num_grid, mode='bilinear', align_corners=True)
+        #     kernel_feat = kernel_layer(kernel_feat)  # [N, c, s, s]
+        # kernel_pred = self.solo_kernel(kernel_feat)  # [N, 1, s, s]
+        # kernel_pred = kernel_pred.view(kernel_pred.shape[0], -1).unsqueeze(-1).unsqueeze(-1)  # [N, s*s, 1, 1]
+        #
+        # # feature branch
+        # feature_feat = self.feature_convs[idx](feature_feat)
+        # feature_pred = self.solo_mask[idx](feature_feat)  # [N, s*s, h, w]
+        #
+        # ins_pred = feature_pred.mul(kernel_pred)
+
+        x_range = torch.linspace(-1, 1, feature_feat.shape[-1], device=feature_feat.device)
+        y_range = torch.linspace(-1, 1, feature_feat.shape[-2], device=feature_feat.device)
         y, x = torch.meshgrid(y_range, x_range)
-        y = y.expand([kernel_feat.shape[0], 1, -1, -1])
-        x = x.expand([kernel_feat.shape[0], 1, -1, -1])
+        y = y.expand([feature_feat.shape[0], 1, -1, -1])
+        x = x.expand([feature_feat.shape[0], 1, -1, -1])
         coord_feat = torch.cat([x, y], 1)
-        kernel_feat = torch.cat([kernel_feat, coord_feat], 1)
+        feature_feat = torch.cat([feature_feat, coord_feat], 1)
 
-        for i, kernel_layer in enumerate(self.kernel_convs):
-            if i == self.cate_down_pos:
-                kernel_feat = F.interpolate(kernel_feat, size=seg_num_grid, mode='bilinear', align_corners=True)
-            kernel_feat = kernel_layer(kernel_feat)  # [N, c, s, s]
-        kernel_pred = self.solo_kernel(kernel_feat)  # [N, 1, s, s]
-        kernel_pred = kernel_pred.view(kernel_pred.shape[0], -1).unsqueeze(-1).unsqueeze(-1)  # [N, s*s, 1, 1]
-
-        # feature branch
         feature_feat = self.feature_convs[idx](feature_feat)
-        feature_pred = self.solo_mask[idx](feature_feat)  # [N, s*s, h, w]
-
-        ins_pred = feature_pred.mul(kernel_pred)
+        ins_pred = self.solo_mask[idx](feature_feat)  # [N, s*s, h, w]
 
         # cate branch
         for i, cate_layer in enumerate(self.cate_convs):
