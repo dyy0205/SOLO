@@ -32,20 +32,8 @@ def dice_loss(input, target):
     return 1 - d
 
 
-def generalized_dice_loss(input, target):
-    input = input.contiguous().view(input.size()[0], -1)
-    target = target.contiguous().view(target.size()[0], -1).float()
-
-    a = torch.sum(input * target, 1)
-    b = torch.sum(input * input, 1) + 0.001
-    c = torch.sum(target * target, 1) + 0.001
-    w = 1 / c ** 2
-    d = (2 * w * a) / (b + w * c)
-    return 1 - d
-
-
 @HEADS.register_module
-class SOLOV2AttentionHead(nn.Module):
+class SOLOAttentionHead(nn.Module):
 
     def __init__(self,
                  num_classes,
@@ -64,7 +52,7 @@ class SOLOV2AttentionHead(nn.Module):
                  loss_contour=None,
                  conv_cfg=None,
                  norm_cfg=None):
-        super(SOLOV2AttentionHead, self).__init__()
+        super(SOLOAttentionHead, self).__init__()
         self.num_classes = num_classes
         self.seg_num_grids = num_grids
         self.cate_out_channels = self.num_classes - 1
@@ -141,6 +129,7 @@ class SOLOV2AttentionHead(nn.Module):
 
         for i in range(self.stacked_convs):
             chn = self.in_channels + 2 if i == 0 else self.seg_feat_channels
+
             self.kernel_convs.append(
                 ConvModule(
                     chn,
@@ -150,7 +139,6 @@ class SOLOV2AttentionHead(nn.Module):
                     padding=1,
                     norm_cfg=norm_cfg,
                     bias=norm_cfg is None))
-
             chn = self.in_channels if i == 0 else self.seg_feat_channels
             self.cate_convs.append(
                 ConvModule(
@@ -161,16 +149,15 @@ class SOLOV2AttentionHead(nn.Module):
                     padding=1,
                     norm_cfg=norm_cfg,
                     bias=norm_cfg is None))
-
         self.solo_kernel = nn.Conv2d(
-            self.seg_feat_channels, self.seg_feat_channels, 1, padding=0)
+            self.seg_feat_channels, 1, 1, padding=0)
         self.solo_cate = nn.Conv2d(
             self.seg_feat_channels, self.cate_out_channels, 3, padding=1)
-        self.solo_ins_list = nn.ModuleList()
+        self.solo_mask = nn.ModuleList()
         for seg_num_grid in self.seg_num_grids:
-            self.solo_ins_list.append(
+            self.solo_mask.append(
                 nn.Conv2d(
-                    self.seg_feat_channels, seg_num_grid ** 2, 1))
+                    self.seg_feat_channels, seg_num_grid ** 2, 1, padding=0))
 
     def init_weights(self):
         # TODO: init for feat_conv
@@ -188,6 +175,7 @@ class SOLOV2AttentionHead(nn.Module):
 
     def forward(self, feats, eval=False):
         new_feats = self.split_feats(feats)
+        featmap_sizes = [featmap.size()[-2:] for featmap in new_feats]
         kernel_pred, cate_pred = multi_apply(self.forward_single, new_feats,
                                              list(range(len(self.seg_num_grids))),
                                              eval=eval)
@@ -205,16 +193,16 @@ class SOLOV2AttentionHead(nn.Module):
         feature_add_all_level = feature_add_all_level + self.feature_convs[3](torch.cat([feats[3], coord_feat], 1))
 
         ins_pred = []
-        for i, ins_layer in enumerate(self.solo_ins_list):
-            kernel_i = F.interpolate(kernel_pred[i], size=feature_add_all_level.shape[-2:],
-                                     mode='bilinear', align_corners=True)
-            ins_i = ins_layer(feature_add_all_level + kernel_i)
-            # kernel_i = kernel_pred[i].mean(1).view(-1, self.seg_num_grids[i] ** 2).unsqueeze(-1).unsqueeze(-1)
-            # ins_i = feature_i.mul(kernel_i)
-            if eval:
+        for i in range(5):
+            feature = self.solo_mask[i](feature_add_all_level)  # [N, sxs, h, w]
+            kernel = kernel_pred[i]  # [N, sxs, 1, 1]
+            ins_i = feature.mul(kernel)
+            if not eval:
+                ins_i = F.interpolate(ins_i, size=(featmap_sizes[i][0] * 2, featmap_sizes[i][1] * 2),
+                                      mode='bilinear', align_corners=True)
+            else:
                 ins_i = ins_i.sigmoid()
             ins_pred.append(ins_i)
-
         return ins_pred, cate_pred
 
     def split_feats(self, feats):
@@ -227,6 +215,8 @@ class SOLOV2AttentionHead(nn.Module):
     def forward_single(self, x, idx, eval=False):
         kernel_feat = x
         cate_feat = x
+        seg_num_grid = self.seg_num_grids[idx]
+
         # kernel branch
         # concat coord
         x_range = torch.linspace(-1, 1, kernel_feat.shape[-1], device=kernel_feat.device)
@@ -238,24 +228,22 @@ class SOLOV2AttentionHead(nn.Module):
         kernel_feat = torch.cat([kernel_feat, coord_feat], 1)
 
         for i, kernel_layer in enumerate(self.kernel_convs):
-            # if i == self.cate_down_pos:
-            #     seg_num_grid = self.seg_num_grids[idx]
-            #     kernel_feat = F.interpolate(kernel_feat, size=seg_num_grid, mode='bilinear', align_corners=True)
-            kernel_feat = kernel_layer(kernel_feat)
-        # kernel_pred = self.solo_kernel(kernel_feat)
+            if i == self.cate_down_pos:
+                kernel_feat = F.interpolate(kernel_feat, size=seg_num_grid, mode='bilinear', align_corners=True)
+            kernel_feat = kernel_layer(kernel_feat)  # [N, c, s, s]
+        kernel_pred = self.solo_kernel(kernel_feat)  # [N, 1, s, s]
+        kernel_pred = kernel_pred.view(kernel_pred.shape[0], -1).unsqueeze(-1).unsqueeze(-1)  # [N, s*s, 1, 1]
 
         # cate branch
         for i, cate_layer in enumerate(self.cate_convs):
             if i == self.cate_down_pos:
-                seg_num_grid = self.seg_num_grids[idx]
                 cate_feat = F.interpolate(cate_feat, size=seg_num_grid, mode='bilinear', align_corners=True)
             cate_feat = cate_layer(cate_feat)
-
         cate_pred = self.solo_cate(cate_feat)
 
         if eval:
             cate_pred = points_nms(cate_pred.sigmoid(), kernel=2).permute(0, 2, 3, 1)
-        return kernel_feat, cate_pred
+        return kernel_pred, cate_pred
 
     def loss(self,
              ins_preds,
@@ -266,8 +254,8 @@ class SOLOV2AttentionHead(nn.Module):
              img_metas,
              cfg,
              gt_bboxes_ignore=None):
-        featmap_sizes = [featmap.size()[-2:] for featmap in
-                         ins_preds]
+        featmap_sizes = [featmap.size()[-2:] for featmap in ins_preds]
+
         ins_label_list, cate_label_list, ins_ind_label_list = multi_apply(
             self.solo_target_single,
             gt_bbox_list,
