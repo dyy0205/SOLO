@@ -129,7 +129,6 @@ class SOLOAttentionHead(nn.Module):
 
         for i in range(self.stacked_convs):
             chn = self.in_channels + 2 if i == 0 else self.seg_feat_channels
-
             self.kernel_convs.append(
                 ConvModule(
                     chn,
@@ -139,6 +138,7 @@ class SOLOAttentionHead(nn.Module):
                     padding=1,
                     norm_cfg=norm_cfg,
                     bias=norm_cfg is None))
+
             chn = self.in_channels if i == 0 else self.seg_feat_channels
             self.cate_convs.append(
                 ConvModule(
@@ -194,9 +194,8 @@ class SOLOAttentionHead(nn.Module):
 
         ins_pred = []
         for i in range(5):
-            feature = self.solo_mask[i](feature_add_all_level)  # [N, sxs, h, w]
-            kernel = kernel_pred[i]  # [N, sxs, 1, 1]
-            ins_i = feature.mul(kernel)
+            feature_pred = self.solo_mask[i](feature_add_all_level)  # [N, sxs, h, w]
+            ins_i = feature_pred.mul(kernel_pred[i])
             if not eval:
                 ins_i = F.interpolate(ins_i, size=(featmap_sizes[i][0] * 2, featmap_sizes[i][1] * 2),
                                       mode='bilinear', align_corners=True)
