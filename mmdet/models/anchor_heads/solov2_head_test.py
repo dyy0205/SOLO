@@ -9,8 +9,6 @@ from ..registry import HEADS
 from ..utils import bias_init_with_prob, ConvModule
 
 from scipy import ndimage
-import numpy as np
-import cv2
 
 
 def points_nms(heat, kernel=2):
@@ -31,6 +29,17 @@ def dice_loss(input, target):
     d = (2 * a) / (b + c)
     return 1 - d
 
+def balanced_bce_loss(input, target):
+    pos = target.eq(1).float()
+    neg = target.eq(0).float()
+    num_pos = pos.sum()
+    num_neg = neg.sum()
+    # alpha_pos = num_neg / (num_pos + num_neg)
+    # alpha_neg = num_pos / (num_pos + num_neg)
+    # weights = alpha_pos * pos + alpha_neg * neg
+    weights = (num_neg / num_pos) * pos + neg
+    return F.binary_cross_entropy_with_logits(input, target.float(), weights, reduction='mean')
+
 
 @HEADS.register_module
 class SOLOAttentionHead(nn.Module):
@@ -46,10 +55,9 @@ class SOLOAttentionHead(nn.Module):
                  sigma=0.4,
                  num_grids=None,
                  cate_down_pos=0,
-                 with_contour=False,
                  loss_ins=None,
+                 loss_mask=None,
                  loss_cate=None,
-                 loss_contour=None,
                  conv_cfg=None,
                  norm_cfg=None):
         super(SOLOAttentionHead, self).__init__()
@@ -64,10 +72,9 @@ class SOLOAttentionHead(nn.Module):
         self.cate_down_pos = cate_down_pos
         self.base_edge_list = base_edge_list
         self.scale_ranges = scale_ranges
-        self.with_contour = with_contour
         self.loss_cate = build_loss(loss_cate)
         self.ins_loss_weight = loss_ins['loss_weight']
-        self.loss_contour = build_loss(loss_contour) if self.with_contour else None
+        self.mask_loss_weight = loss_mask['loss_weight'] if loss_mask is not None else None
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
         self._init_layers()
@@ -283,13 +290,21 @@ class SOLOAttentionHead(nn.Module):
 
         # dice loss
         loss_ins = []
+        loss_mask = 0
         for input, target in zip(ins_preds, ins_labels):
             if input.size()[0] == 0:
                 continue
+            if self.mask_loss_weight is not None:
+                # loss_mask += balanced_bce_loss(input, target)
+                loss_mask += F.binary_cross_entropy_with_logits(input, target.float())
             input = torch.sigmoid(input)
             loss_ins.append(dice_loss(input, target))
+
         loss_ins = torch.cat(loss_ins).mean()
         loss_ins = loss_ins * self.ins_loss_weight
+        if self.mask_loss_weight is not None:
+            loss_mask /= len(ins_labels)
+            loss_mask = loss_mask * self.mask_loss_weight
 
         # cate branch
         cate_labels = [
@@ -307,56 +322,8 @@ class SOLOAttentionHead(nn.Module):
 
         loss_cate = self.loss_cate(flatten_cate_preds, flatten_cate_labels, avg_factor=num_ins + 1)
 
-        # contour loss
-        def _mask_contour(mask, thickness=1):
-            device = mask.device
-            h, w = mask.shape
-            _mask = mask.cpu().detach().numpy()
-            _mask[_mask == 1] = 255
-            cnts, hierarchy = cv2.findContours(_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-            if len(cnts) != 0:
-                contour = np.zeros((h, w, 3))
-                contour = cv2.drawContours(contour, cnts, -1, (255, 255, 255), thickness).astype('uint8')
-                contour = cv2.cvtColor(contour, cv2.COLOR_BGR2GRAY)
-                contour = torch.from_numpy((contour / 255).astype('uint8')).to(device)
-                return contour
-            else:
-                return torch.zeros_like(mask)
-
-        if self.with_contour:
-            cnt_labels = []
-            for level_masks in ins_labels:
-                if level_masks.shape[0] == 0:
-                    continue
-                cnt_labels.append(
-                    torch.cat([_mask_contour(mask).flatten().long() for mask in level_masks])
-                )
-            flatten_cnt_labels = torch.cat(cnt_labels)
-
-            cnt_preds = []
-            for level_masks in ins_preds:
-                if level_masks.shape[0] == 0:
-                    continue
-                cnt_preds.append(
-                    torch.cat([_mask_contour(torch.sigmoid(mask) >= 0.5).flatten().float() for mask in level_masks])
-                )
-            flatten_cnt_preds = torch.cat(cnt_preds).unsqueeze(-1)
-
-            loss_contour = self.loss_contour(flatten_cnt_preds, flatten_cnt_labels)
-            # print(loss_contour)
-
-            # loss_contour = []
-            # for preds, labels in zip(ins_preds, ins_labels):
-            #     if preds.size()[0] == 0 or labels.size()[0] == 0:
-            #         continue
-            #     cnt_labels = torch.stack([_mask_contour(mask) for mask in labels]).float()
-            #     cnt_preds = torch.sigmoid(preds) * cnt_labels
-            #     loss_cnt = self.loss_contour(cnt_preds, cnt_labels)
-            #     loss_contour.append(loss_cnt)
-            # loss_contour = torch.stack(loss_contour).mean()
-            # print(loss_contour)
-
-            return dict(loss_ins=loss_ins, loss_cate=loss_cate, loss_contour=loss_contour)
+        if self.mask_loss_weight is not None:
+            return dict(loss_ins=loss_ins, loss_mask=loss_mask, loss_cate=loss_cate)
         else:
             return dict(loss_ins=loss_ins, loss_cate=loss_cate)
 
