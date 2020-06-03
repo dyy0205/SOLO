@@ -57,6 +57,7 @@ class SOLOAttentionHead(nn.Module):
                  cate_down_pos=0,
                  loss_ins=None,
                  loss_mask=None,
+                 loss_ssim=None,
                  loss_cate=None,
                  conv_cfg=None,
                  norm_cfg=None):
@@ -75,6 +76,7 @@ class SOLOAttentionHead(nn.Module):
         self.loss_cate = build_loss(loss_cate)
         self.ins_loss_weight = loss_ins['loss_weight']
         self.mask_loss_weight = loss_mask['loss_weight'] if loss_mask is not None else None
+        self.loss_ssim = build_loss(loss_ssim)
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
         self._init_layers()
@@ -291,20 +293,25 @@ class SOLOAttentionHead(nn.Module):
         # dice loss
         loss_ins = []
         loss_mask = 0
+        loss_ssim = 0
         for input, target in zip(ins_preds, ins_labels):
             if input.size()[0] == 0:
                 continue
             if self.mask_loss_weight is not None:
                 # loss_mask += balanced_bce_loss(input, target)
                 loss_mask += F.binary_cross_entropy_with_logits(input, target.float())
-            input = torch.sigmoid(input)
-            loss_ins.append(dice_loss(input, target))
+            loss_ins.append(dice_loss(torch.sigmoid(input), target))
+            if self.loss_ssim is not None:
+                loss_ssim += self.loss_ssim(torch.sigmoid(input).unsqueeze(0),
+                                            target.float().unsqueeze(0))
 
         loss_ins = torch.cat(loss_ins).mean()
         loss_ins = loss_ins * self.ins_loss_weight
         if self.mask_loss_weight is not None:
             loss_mask /= len(ins_labels)
             loss_mask = loss_mask * self.mask_loss_weight
+        if self.loss_ssim is not None:
+            loss_ssim /= len(ins_labels)
 
         # cate branch
         cate_labels = [
@@ -322,8 +329,12 @@ class SOLOAttentionHead(nn.Module):
 
         loss_cate = self.loss_cate(flatten_cate_preds, flatten_cate_labels, avg_factor=num_ins + 1)
 
-        if self.mask_loss_weight is not None:
+        if self.mask_loss_weight is not None and self.loss_ssim is not None:
+            return dict(loss_ins=loss_ins, loss_mask=loss_mask, loss_ssim=loss_ssim, loss_cate=loss_cate)
+        elif self.mask_loss_weight is not None and self.loss_ssim is None:
             return dict(loss_ins=loss_ins, loss_mask=loss_mask, loss_cate=loss_cate)
+        elif self.mask_loss_weight is None and self.loss_ssim is not None:
+            return dict(loss_ins=loss_ins, loss_ssim=loss_ssim, loss_cate=loss_cate)
         else:
             return dict(loss_ins=loss_ins, loss_cate=loss_cate)
 
