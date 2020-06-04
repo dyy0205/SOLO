@@ -253,7 +253,8 @@ def make_res_layer(block,
                    dcn=None,
                    gcb=None,
                    gen_attention=None,
-                   gen_attention_blocks=[]):
+                   gen_attention_blocks=[],
+                   **kwargs):
     downsample = None
     if stride != 1 or inplanes != planes * block.expansion:
         downsample = nn.Sequential(
@@ -282,7 +283,8 @@ def make_res_layer(block,
             dcn=dcn,
             gcb=gcb,
             gen_attention=gen_attention if
-            (0 in gen_attention_blocks) else None))
+            (0 in gen_attention_blocks) else None,
+            **kwargs))
     inplanes = planes * block.expansion
     for i in range(1, blocks):
         layers.append(
@@ -298,7 +300,8 @@ def make_res_layer(block,
                 dcn=dcn,
                 gcb=gcb,
                 gen_attention=gen_attention if
-                (i in gen_attention_blocks) else None))
+                (i in gen_attention_blocks) else None,
+                **kwargs))
 
     return nn.Sequential(*layers)
 

@@ -76,7 +76,7 @@ class SOLOAttentionHead(nn.Module):
         self.loss_cate = build_loss(loss_cate)
         self.ins_loss_weight = loss_ins['loss_weight']
         self.mask_loss_weight = loss_mask['loss_weight'] if loss_mask is not None else None
-        self.loss_ssim = build_loss(loss_ssim)
+        self.loss_ssim = build_loss(loss_ssim) if loss_ssim is not None else None
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
         self._init_layers()

@@ -10,33 +10,35 @@ from torch.autograd import Variable
 import torch.optim as optim
 from torch.optim import lr_scheduler
 from torchvision import datasets, transforms
-from mmdet.models import EfficientNet
-from mmdet.models import EfficientNet_Lite
+from mmdet.models import RegNet
 
 
-class EfficientNet_cls(EfficientNet_Lite):
-    def __init__(self, model_name, num_classes=4, pretrained=None):
-        super().__init__(model_name)
+class RegNet_cls(RegNet):
+    def __init__(self,
+                 arch='regnetx_800mf',
+                 base_channels=32,
+                 num_classes=4,
+                 pretrained=None):
+        super().__init__(arch, base_channels=base_channels)
         self.num_classes = num_classes
-        self._fc = nn.Linear(1280, self.num_classes)
+        self.avg_pool = nn.AvgPool2d((7, 7), (1, 1))
+        self.last_linear = nn.Linear(672, num_classes)
         self.init_weights(pretrained=pretrained)
 
     def forward(self, inputs):
-        bs = inputs.size(0)
         # Convolution layers
         x = self.extract_features(inputs)
 
         # Pooling and final linear layer
-        x = self._avg_pooling(x)
-        x = x.view(bs, -1)
-        x = self._dropout(x)
-        x = self._fc(x)
+        x = self.avg_pool(x)
+        x = x.view(x.size(0), -1)
+        x = self.last_linear(x)
         return x
 
 
 if __name__ == '__main__':
-    model = EfficientNet_cls(model_name='efficientnet-b3', num_classes=4,
-                             pretrained='/versa/dyy/pretrained_models/tf_efficientnet_lite3_modifed.pth')
+    model = RegNet_cls(arch='regnetx_800mf', base_channels=32, num_classes=4,
+                       pretrained='/versa/dyy/pretrained_models/RegNetX-800MF_dds_8gpu.pth')
     # print(model)
     # for i, (k, v) in enumerate(model.state_dict().items()):
     #     print(i, k, v.shape)
@@ -67,7 +69,7 @@ if __name__ == '__main__':
                                               data_transforms[x])
                       for x in ['train', 'val']}
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x],
-                                                  batch_size=200, num_workers=4,
+                                                  batch_size=512, num_workers=4,
                                                   shuffle=True if x == 'train' else False)
                    for x in ['train', 'val']}
     dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
@@ -76,10 +78,10 @@ if __name__ == '__main__':
 
     criterion = nn.CrossEntropyLoss()
     # Observe that all parameters are being optimized
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
     # Decay LR by a factor of 0.1 every 7 epochs
     # scheduler = lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
-    scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-5)  # T_max means 1/2 cosine period
+    scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-4)  # T_max means 1/2 cosine period
 
     num_epochs = 50
 
@@ -140,7 +142,7 @@ if __name__ == '__main__':
                 best_model_wts = copy.deepcopy(model.state_dict())
 
         torch.save(model.state_dict(),
-                   '/versa/dyy/SOLO/work_dirs/backbone/b3/tuned-{}-{}.pth'.format(epoch, epoch_acc))
+                   '/versa/dyy/SOLO/work_dirs/backbone/reg800/tuned-{}-{}.pth'.format(epoch, epoch_acc))
         print()
 
     time_elapsed = time.time() - since
@@ -151,4 +153,4 @@ if __name__ == '__main__':
     # load best model weights
     model.load_state_dict(best_model_wts)
     torch.save(model.cpu().state_dict(),
-               '/versa/dyy/SOLO/work_dirs/backbone/b3/tuned-best-{}.pth'.format(best_acc))
+               '/versa/dyy/SOLO/work_dirs/backbone/reg800/tuned-best-{}.pth'.format(best_acc))

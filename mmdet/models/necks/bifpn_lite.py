@@ -321,35 +321,46 @@ class SingleBiFPN(nn.Module):
 class BiFPN_Lite(nn.Module):
 
     def __init__(self,
+                 is_efficientnet=True,
                  compound_coef=0,
                  num_repeats=None,
+                 in_channels=None,
                  out_channels=None,
+                 attention=True,
                  freeze_params=False):
         super(BiFPN_Lite, self).__init__()
-        self.compound_coef = compound_coef
-        self.input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536]
-        self.fpn_num_filters = [64, 88, 112, 160, 224, 288, 384, 384]
-        self.fpn_cell_repeats = [3, 4, 5, 6, 7, 7, 8, 8]
-        self.conv_channel_coef = {
-            # the channels of C2/C3/C4/C5.
-            0: [24, 40, 112, 320],
-            1: [24, 40, 112, 320],
-            2: [24, 48, 120, 352],
-            3: [32, 48, 136, 384],
-            4: [32, 56, 160, 448],
-            5: [40, 64, 176, 512],
-            6: [40, 72, 200, 576],
-            7: [40, 72, 200, 576],
-        }
-        self.num_repeats = num_repeats if num_repeats is not None else self.fpn_cell_repeats[compound_coef]
-        self.out_channels = out_channels if out_channels is not None else self.fpn_num_filters[self.compound_coef]
+        self.is_efficientnet = is_efficientnet
+        self.attention = attention
         self.freeze_params = freeze_params
 
+        if self.is_efficientnet:
+            input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536]
+            fpn_num_filters = [64, 88, 112, 160, 224, 288, 384, 384]
+            fpn_cell_repeats = [3, 4, 5, 6, 7, 7, 8, 8]
+            conv_channel_coef = {
+                # the channels of C2/C3/C4/C5.
+                0: [24, 40, 112, 320],
+                1: [24, 40, 112, 320],
+                2: [24, 48, 120, 352],
+                3: [32, 48, 136, 384],
+                4: [32, 56, 160, 448],
+                5: [40, 64, 176, 512],
+                6: [40, 72, 200, 576],
+                7: [40, 72, 200, 576],
+            }
+            self.num_repeats = num_repeats if num_repeats is not None else fpn_cell_repeats[compound_coef]
+            self.in_channels = conv_channel_coef[compound_coef]
+            self.out_channels = out_channels if out_channels is not None else fpn_num_filters[compound_coef]
+        else:
+            self.num_repeats = num_repeats
+            self.in_channels = in_channels
+            self.out_channels = out_channels
+
         self.bifpn = nn.Sequential(
-            *[SingleBiFPN(in_channels=self.conv_channel_coef[compound_coef],
+            *[SingleBiFPN(in_channels=self.in_channels,
                           out_channels=self.out_channels,
                           first_block=True if _ == 0 else False,
-                          attention=True if compound_coef < 6 else False,
+                          attention=self.attention,
                           freeze_params=self.freeze_params)
               for _ in range(self.num_repeats)])
 
