@@ -82,7 +82,6 @@ class SOLOAttentionHead(nn.Module):
         self._init_layers()
 
     def _init_layers(self):
-        # norm_cfg = dict(type='GN', num_groups=32, requires_grad=True)
         norm_cfg = dict(type='BN', requires_grad=True)
         self.feature_convs = nn.ModuleList()
         self.kernel_convs = nn.ModuleList()
@@ -397,8 +396,11 @@ class SOLOAttentionHead(nn.Module):
 
                 cate_label[top:(down + 1), left:(right + 1)] = gt_label
                 # ins
-                seg_mask = mmcv.imrescale(seg_mask, scale=1. / output_stride)
-                seg_mask = torch.Tensor(seg_mask)
+                # seg_mask = mmcv.imrescale(seg_mask, scale=1. / output_stride)
+                # seg_mask = torch.Tensor(seg_mask)
+                seg_mask = F.interpolate(torch.from_numpy(seg_mask).unsqueeze(0).unsqueeze(0).float(),
+                                         scale_factor=1. / output_stride, mode='bilinear', align_corners=True)
+                seg_mask = torch.squeeze(seg_mask)
                 for i in range(top, down + 1):
                     for j in range(left, right + 1):
                         label = int(i * num_grid + j)

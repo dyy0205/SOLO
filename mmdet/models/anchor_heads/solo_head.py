@@ -38,9 +38,10 @@ def balanced_bce_loss(input, target):
     neg = target.eq(0).float()
     num_pos = pos.sum()
     num_neg = neg.sum()
-    alpha_pos = num_neg / (num_pos + num_neg)
-    alpha_neg = num_pos / (num_pos + num_neg)
-    weights = alpha_pos * pos + alpha_neg * neg
+    # alpha_pos = num_neg / (num_pos + num_neg)
+    # alpha_neg = num_pos / (num_pos + num_neg)
+    # weights = alpha_pos * pos + alpha_neg * neg
+    weights = (num_neg / num_pos) * pos + neg
     return F.binary_cross_entropy_with_logits(input, target.float(), weights, reduction='mean')
 
 

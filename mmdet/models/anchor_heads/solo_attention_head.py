@@ -1,4 +1,4 @@
-import mmcv
+import cv2, mmcv
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,8 +9,6 @@ from ..registry import HEADS
 from ..utils import bias_init_with_prob, ConvModule
 
 from scipy import ndimage
-import numpy as np
-import cv2
 
 
 def points_nms(heat, kernel=2):
@@ -32,16 +30,16 @@ def dice_loss(input, target):
     return 1 - d
 
 
-def generalized_dice_loss(input, target):
-    input = input.contiguous().view(input.size()[0], -1)
-    target = target.contiguous().view(target.size()[0], -1).float()
-
-    a = torch.sum(input * target, 1)
-    b = torch.sum(input * input, 1) + 0.001
-    c = torch.sum(target * target, 1) + 0.001
-    w = 1 / c ** 2
-    d = (2 * w * a) / (b + w * c)
-    return 1 - d
+def get_mask_contour(mask, kernel=20):
+    device = mask.device
+    mask = mask.cpu().detach().numpy()
+    # h, w = mask.shape
+    # kernel = int(mask.sum() / (h * w) * kernel)
+    mask[mask == 1] = 255
+    contour = cv2.Canny(mask, 100, 200)
+    contour = cv2.dilate(contour, kernel=cv2.getStructuringElement(cv2.MORPH_RECT, (kernel, kernel)))
+    contour = torch.from_numpy(contour / 255.).to(device)
+    return contour
 
 
 @HEADS.register_module
@@ -58,10 +56,10 @@ class SOLOAttentionHead(nn.Module):
                  sigma=0.4,
                  num_grids=None,
                  cate_down_pos=0,
-                 with_contour=False,
                  loss_ins=None,
+                 loss_mask=None,
+                 loss_boundary=None,
                  loss_cate=None,
-                 loss_contour=None,
                  conv_cfg=None,
                  norm_cfg=None):
         super(SOLOAttentionHead, self).__init__()
@@ -76,28 +74,26 @@ class SOLOAttentionHead(nn.Module):
         self.cate_down_pos = cate_down_pos
         self.base_edge_list = base_edge_list
         self.scale_ranges = scale_ranges
-        self.with_contour = with_contour
         self.loss_cate = build_loss(loss_cate)
         self.ins_loss_weight = loss_ins['loss_weight']
-        self.loss_contour = build_loss(loss_contour) if self.with_contour else None
+        self.loss_mask = build_loss(loss_mask) if loss_mask is not None else None
+        self.loss_boundary = build_loss(loss_boundary) if loss_boundary is not None else None
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
         self._init_layers()
 
     def _init_layers(self):
-        # norm_cfg = dict(type='GN', num_groups=32, requires_grad=True)
         norm_cfg = dict(type='BN', requires_grad=True)
         self.feature_convs = nn.ModuleList()
         self.kernel_convs = nn.ModuleList()
         self.cate_convs = nn.ModuleList()
 
         # mask feature
-        for i in range(5):
+        for i in range(4):
             convs_per_level = nn.Sequential()
             if i == 0:
                 one_conv = ConvModule(
-                    # self.in_channels,
-                    self.in_channels + 2,
+                    self.in_channels,
                     self.seg_feat_channels,
                     3,
                     padding=1,
@@ -109,9 +105,12 @@ class SOLOAttentionHead(nn.Module):
                 continue
             for j in range(i):
                 if j == 0:
+                    if i == 3:
+                        in_channel = self.in_channels + 2
+                    else:
+                        in_channel = self.in_channels
                     one_conv = ConvModule(
-                        # self.in_channels,
-                        self.in_channels + 2,
+                        in_channel,
                         self.seg_feat_channels,
                         3,
                         padding=1,
@@ -159,13 +158,10 @@ class SOLOAttentionHead(nn.Module):
                     padding=1,
                     norm_cfg=norm_cfg,
                     bias=norm_cfg is None))
-
-        self.solo_cate = nn.Conv2d(
-            self.seg_feat_channels, self.cate_out_channels, 3, padding=1)
-
         self.solo_kernel = nn.Conv2d(
             self.seg_feat_channels, 1, 1, padding=0)
-
+        self.solo_cate = nn.Conv2d(
+            self.seg_feat_channels, self.cate_out_channels, 3, padding=1)
         self.solo_mask = nn.ModuleList()
         for seg_num_grid in self.seg_num_grids:
             self.solo_mask.append(
@@ -187,17 +183,45 @@ class SOLOAttentionHead(nn.Module):
         normal_init(self.solo_cate, std=0.01, bias=bias_cate)
 
     def forward(self, feats, eval=False):
-        ins_pred, cate_pred = multi_apply(self.forward_single, feats,
-                                          list(range(len(self.seg_num_grids))),
-                                          eval=eval)
+        new_feats = self.split_feats(feats)
+        featmap_sizes = [featmap.size()[-2:] for featmap in new_feats]
+        kernel_pred, cate_pred = multi_apply(self.forward_single_stage, new_feats,
+                                             list(range(len(self.seg_num_grids))),
+                                             eval=eval)
+        # add coord for p5
+        x_range = torch.linspace(-1, 1, feats[-2].shape[-1], device=feats[-2].device)
+        y_range = torch.linspace(-1, 1, feats[-2].shape[-2], device=feats[-2].device)
+        y, x = torch.meshgrid(y_range, x_range)
+        y = y.expand([feats[-2].shape[0], 1, -1, -1])
+        x = x.expand([feats[-2].shape[0], 1, -1, -1])
+        coord_feat = torch.cat([x, y], 1)
+
+        feature_add_all_level = self.feature_convs[0](feats[0])
+        for i in range(1, 3):
+            feature_add_all_level = feature_add_all_level + self.feature_convs[i](feats[i])
+        feature_add_all_level = feature_add_all_level + self.feature_convs[3](torch.cat([feats[3], coord_feat], 1))
+
+        ins_pred = []
+        for i in range(5):
+            feature_pred = self.solo_mask[i](feature_add_all_level)  # [N, sxs, h, w]
+            ins_i = feature_pred.mul(kernel_pred[i])
+            if not eval:
+                ins_i = F.interpolate(ins_i, size=(featmap_sizes[i][0] * 2, featmap_sizes[i][1] * 2),
+                                      mode='bilinear', align_corners=True)
+                # ins_i = ins_i
+            else:
+                ins_i = ins_i.sigmoid()
+            ins_pred.append(ins_i)
         return ins_pred, cate_pred
 
-    def forward_single(self, x, idx, eval=False):
-        feature_feat = x
-        if idx == 0:
-            x = F.interpolate(x, scale_factor=0.5, mode='bilinear', align_corners=True)
-        if idx == 4:
-            x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
+    def split_feats(self, feats):
+        return (F.interpolate(feats[0], scale_factor=0.5, mode='bilinear', align_corners=True),
+                feats[1],
+                feats[2],
+                feats[3],
+                F.interpolate(feats[4], size=feats[3].shape[-2:], mode='bilinear', align_corners=True))
+
+    def forward_single_stage(self, x, idx, eval=False):
         kernel_feat = x
         cate_feat = x
         seg_num_grid = self.seg_num_grids[idx]
@@ -219,23 +243,6 @@ class SOLOAttentionHead(nn.Module):
         kernel_pred = self.solo_kernel(kernel_feat)  # [N, 1, s, s]
         kernel_pred = kernel_pred.view(kernel_pred.shape[0], -1).unsqueeze(-1).unsqueeze(-1)  # [N, s*s, 1, 1]
 
-        # feature branch
-        feature_feat = self.feature_convs[idx](feature_feat)
-        feature_pred = self.solo_mask[idx](feature_feat)  # [N, s*s, h, w]
-
-        ins_pred = feature_pred.mul(kernel_pred)
-
-        # x_range = torch.linspace(-1, 1, feature_feat.shape[-1], device=feature_feat.device)
-        # y_range = torch.linspace(-1, 1, feature_feat.shape[-2], device=feature_feat.device)
-        # y, x = torch.meshgrid(y_range, x_range)
-        # y = y.expand([feature_feat.shape[0], 1, -1, -1])
-        # x = x.expand([feature_feat.shape[0], 1, -1, -1])
-        # coord_feat = torch.cat([x, y], 1)
-        # feature_feat = torch.cat([feature_feat, coord_feat], 1)
-        #
-        # feature_feat = self.feature_convs[idx](feature_feat)
-        # ins_pred = self.solo_mask[idx](feature_feat)  # [N, s*s, h, w]
-
         # cate branch
         for i, cate_layer in enumerate(self.cate_convs):
             if i == self.cate_down_pos:
@@ -244,13 +251,13 @@ class SOLOAttentionHead(nn.Module):
         cate_pred = self.solo_cate(cate_feat)
 
         if eval:
-            ins_pred = ins_pred.sigmoid()
             cate_pred = points_nms(cate_pred.sigmoid(), kernel=2).permute(0, 2, 3, 1)
-        return ins_pred, cate_pred
+        return kernel_pred, cate_pred
 
     def loss(self,
              ins_preds,
              cate_preds,
+             gt_image_list,
              gt_bbox_list,
              gt_label_list,
              gt_mask_list,
@@ -259,14 +266,20 @@ class SOLOAttentionHead(nn.Module):
              gt_bboxes_ignore=None):
         featmap_sizes = [featmap.size()[-2:] for featmap in ins_preds]
 
-        ins_label_list, cate_label_list, ins_ind_label_list = multi_apply(
-            self.solo_target_single,
+        img_label_list, ins_label_list, cate_label_list, ins_ind_label_list = multi_apply(
+            self.solo_target_single_img,
+            gt_image_list,
             gt_bbox_list,
             gt_label_list,
             gt_mask_list,
             featmap_sizes=featmap_sizes)
 
         # ins branch
+        img_labels = [torch.cat([img_labels_level_img[ins_ind_labels_level_img, ...]
+                                 for img_labels_level_img, ins_ind_labels_level_img in
+                                 zip(img_labels_level, ins_ind_labels_level)], 0)
+                      for img_labels_level, ins_ind_labels_level in zip(zip(*img_label_list), zip(*ins_ind_label_list))]
+
         ins_labels = [torch.cat([ins_labels_level_img[ins_ind_labels_level_img, ...]
                                  for ins_labels_level_img, ins_ind_labels_level_img in
                                  zip(ins_labels_level, ins_ind_labels_level)], 0)
@@ -285,15 +298,33 @@ class SOLOAttentionHead(nn.Module):
         flatten_ins_ind_labels = torch.cat(ins_ind_labels)
         num_ins = flatten_ins_ind_labels.int().sum()
 
-        # dice loss
         loss_ins = []
-        for input, target in zip(ins_preds, ins_labels):
-            if input.size()[0] == 0:
+        loss_mask = 0
+        loss_boundary = 0
+        for pred, mask, gray_img in zip(ins_preds, ins_labels, img_labels):
+            # print(pred.shape, mask.shape, gray_img.shape)
+            if pred.size()[0] == 0:
                 continue
-            input = torch.sigmoid(input)
-            loss_ins.append(dice_loss(input, target))
+            pred = torch.sigmoid(pred)
+
+            # dice loss
+            loss_ins.append(dice_loss(pred, mask))
+
+            # bce loss
+            if self.loss_mask is not None:
+                loss_mask += self.loss_mask(pred, mask)
+
+            # gradient boundary loss
+            if self.loss_boundary is not None:
+                # boundary_mask = torch.stack([get_mask_contour(m) for m in mask], 0)
+                # loss_boundary += self.loss_boundary(gray_img, pred, boundary_mask)
+                loss_boundary += self.loss_boundary(gray_img, pred)
+
         loss_ins = torch.cat(loss_ins).mean()
         loss_ins = loss_ins * self.ins_loss_weight
+        loss_mask /= len(ins_preds)
+        loss_boundary /= len(ins_preds)
+        # print(loss_ins, loss_mask, loss_boundary)
 
         # cate branch
         cate_labels = [
@@ -311,87 +342,47 @@ class SOLOAttentionHead(nn.Module):
 
         loss_cate = self.loss_cate(flatten_cate_preds, flatten_cate_labels, avg_factor=num_ins + 1)
 
-        # contour loss
-        def _mask_contour(mask, thickness=1):
-            device = mask.device
-            h, w = mask.shape
-            _mask = mask.cpu().detach().numpy()
-            _mask[_mask == 1] = 255
-            cnts, hierarchy = cv2.findContours(_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-            if len(cnts) != 0:
-                contour = np.zeros((h, w, 3))
-                contour = cv2.drawContours(contour, cnts, -1, (255, 255, 255), thickness).astype('uint8')
-                contour = cv2.cvtColor(contour, cv2.COLOR_BGR2GRAY)
-                contour = torch.from_numpy((contour / 255).astype('uint8')).to(device)
-                return contour
-            else:
-                return torch.zeros_like(mask)
-
-        if self.with_contour:
-            cnt_labels = []
-            for level_masks in ins_labels:
-                if level_masks.shape[0] == 0:
-                    continue
-                cnt_labels.append(
-                    torch.cat([_mask_contour(mask).flatten().long() for mask in level_masks])
-                )
-            flatten_cnt_labels = torch.cat(cnt_labels)
-
-            cnt_preds = []
-            for level_masks in ins_preds:
-                if level_masks.shape[0] == 0:
-                    continue
-                cnt_preds.append(
-                    torch.cat([_mask_contour(torch.sigmoid(mask) >= 0.5).flatten().float() for mask in level_masks])
-                )
-            flatten_cnt_preds = torch.cat(cnt_preds).unsqueeze(-1)
-
-            loss_contour = self.loss_contour(flatten_cnt_preds, flatten_cnt_labels)
-            # print(loss_contour)
-
-            # loss_contour = []
-            # for preds, labels in zip(ins_preds, ins_labels):
-            #     if preds.size()[0] == 0 or labels.size()[0] == 0:
-            #         continue
-            #     cnt_labels = torch.stack([_mask_contour(mask) for mask in labels]).float()
-            #     cnt_preds = torch.sigmoid(preds) * cnt_labels
-            #     loss_cnt = self.loss_contour(cnt_preds, cnt_labels)
-            #     loss_contour.append(loss_cnt)
-            # loss_contour = torch.stack(loss_contour).mean()
-            # print(loss_contour)
-
-            return dict(loss_ins=loss_ins, loss_cate=loss_cate, loss_contour=loss_contour)
+        if self.loss_mask is not None and self.loss_boundary is not None:
+            return dict(loss_ins=loss_ins, loss_mask=loss_mask, loss_boundary=loss_boundary, loss_cate=loss_cate)
+        elif self.loss_mask is not None and self.loss_boundary is None:
+            return dict(loss_ins=loss_ins, loss_mask=loss_mask, loss_cate=loss_cate)
+        elif self.loss_mask is None and self.loss_boundary is not None:
+            return dict(loss_ins=loss_ins, loss_boundary=loss_boundary, loss_cate=loss_cate)
         else:
             return dict(loss_ins=loss_ins, loss_cate=loss_cate)
 
-    def solo_target_single(self,
-                           gt_bboxes_raw,
-                           gt_labels_raw,
-                           gt_masks_raw,
-                           featmap_sizes=None):
-
+    def solo_target_single_img(self,
+                               image_raw,
+                               gt_bboxes_raw,
+                               gt_labels_raw,
+                               gt_masks_raw,
+                               featmap_sizes=None):
         device = gt_labels_raw[0].device
 
         # ins
         gt_areas = torch.sqrt((gt_bboxes_raw[:, 2] - gt_bboxes_raw[:, 0]) * (
                 gt_bboxes_raw[:, 3] - gt_bboxes_raw[:, 1]))
 
+        img_label_list = []
         ins_label_list = []
         cate_label_list = []
         ins_ind_label_list = []
         for (lower_bound, upper_bound), stride, featmap_size, num_grid \
                 in zip(self.scale_ranges, self.strides, featmap_sizes, self.seg_num_grids):
 
+            img_label = torch.zeros([num_grid ** 2, featmap_size[0], featmap_size[1]], dtype=torch.uint8, device=device)
             ins_label = torch.zeros([num_grid ** 2, featmap_size[0], featmap_size[1]], dtype=torch.uint8, device=device)
             cate_label = torch.zeros([num_grid, num_grid], dtype=torch.int64, device=device)
             ins_ind_label = torch.zeros([num_grid ** 2], dtype=torch.bool, device=device)
 
             hit_indices = ((gt_areas >= lower_bound) & (gt_areas <= upper_bound)).nonzero().flatten()
             if len(hit_indices) == 0:
+                img_label_list.append(img_label)
                 ins_label_list.append(ins_label)
                 cate_label_list.append(cate_label)
                 ins_ind_label_list.append(ins_ind_label)
                 continue
+
             gt_bboxes = gt_bboxes_raw[hit_indices]
             gt_labels = gt_labels_raw[hit_indices]
             gt_masks = gt_masks_raw[hit_indices.cpu().numpy(), ...]
@@ -399,9 +390,19 @@ class SOLOAttentionHead(nn.Module):
             half_ws = 0.5 * (gt_bboxes[:, 2] - gt_bboxes[:, 0]) * self.sigma
             half_hs = 0.5 * (gt_bboxes[:, 3] - gt_bboxes[:, 1]) * self.sigma
 
-            output_stride = stride / 2
+            # output_stride = stride / 2
 
-            for seg_mask, gt_label, half_h, half_w in zip(gt_masks, gt_labels, half_hs, half_ws):
+            image = image_raw.cpu().detach().numpy().transpose(1, 2, 0)  # normalized RGB image
+            mean = [123.675, 116.28, 103.53]
+            std = [58.395, 57.12, 57.375]
+            image = (image * std) + mean
+            gray_image = cv2.cvtColor(image.astype('uint8'), cv2.COLOR_RGB2GRAY)
+            gray_image = (gray_image - gray_image.min()) / (gray_image.max() - gray_image.min())
+            gray_image = F.interpolate(torch.from_numpy(gray_image).unsqueeze(0).unsqueeze(0).float(),
+                                       size=featmap_size, mode='bilinear', align_corners=True)
+            gray_image = torch.squeeze(gray_image)
+
+            for gt_bbox, seg_mask, gt_label, half_h, half_w in zip(gt_bboxes, gt_masks, gt_labels, half_hs, half_ws):
                 if seg_mask.sum() < 10:
                     continue
                 # mass center
@@ -423,17 +424,24 @@ class SOLOAttentionHead(nn.Module):
 
                 cate_label[top:(down + 1), left:(right + 1)] = gt_label
                 # ins
-                seg_mask = mmcv.imrescale(seg_mask, scale=1. / output_stride)
-                seg_mask = torch.Tensor(seg_mask)
+                # seg_mask = mmcv.imrescale(seg_mask, scale=1. / output_stride)
+                # seg_mask = torch.Tensor(seg_mask)
+                seg_mask = F.interpolate(torch.from_numpy(seg_mask).unsqueeze(0).unsqueeze(0).float(),
+                                         size=featmap_size, mode='bilinear', align_corners=True)
+                seg_mask = torch.squeeze(seg_mask)
+
                 for i in range(top, down + 1):
                     for j in range(left, right + 1):
                         label = int(i * num_grid + j)
+                        img_label[label, :gray_image.shape[0], :gray_image.shape[1]] = gray_image
                         ins_label[label, :seg_mask.shape[0], :seg_mask.shape[1]] = seg_mask
                         ins_ind_label[label] = True
+            img_label_list.append(img_label)
             ins_label_list.append(ins_label)
             cate_label_list.append(cate_label)
             ins_ind_label_list.append(ins_ind_label)
-        return ins_label_list, cate_label_list, ins_ind_label_list
+
+        return img_label_list, ins_label_list, cate_label_list, ins_ind_label_list
 
     def get_seg(self,
                 seg_preds,

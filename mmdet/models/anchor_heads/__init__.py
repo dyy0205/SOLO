@@ -15,8 +15,8 @@ from .solo_head import SOLOHead
 from .decoupled_solo_head import DecoupledSOLOHead
 from .decoupled_solo_light_head import DecoupledSOLOLightHead
 from .solov2_head import SOLOV2Head
-# from .solo_attention_head import SOLOAttentionHead
-from .solov2_head_test import SOLOAttentionHead
+from .solo_attention_head import SOLOAttentionHead
+# from .solov2_head_test import SOLOv2AttentionHead
 
 __all__ = [
     'AnchorHead', 'GuidedAnchorHead', 'FeatureAdaption', 'RPNHead',

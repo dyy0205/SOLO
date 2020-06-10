@@ -7,7 +7,7 @@ model = dict(
         model_name='efficientnet-b3',
         num_stages=7,
         out_indices=(1, 2, 4, 6),  # C2, C3, C4, C5
-        frozen_stages=7),
+        frozen_stages=-1),
     neck=dict(
         type='BiFPN_Lite',  # P2 ~ P6
         compound_coef=3,
@@ -88,7 +88,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    imgs_per_gpu=12,
+    imgs_per_gpu=7,
     workers_per_gpu=2,
     train=dict(
         type=dataset_type,
@@ -106,15 +106,15 @@ data = dict(
         img_prefix=data_root + 'val2017/',
         pipeline=test_pipeline))
 # optimizer
-optimizer = dict(type='SGD', lr=0.2, momentum=0.9, weight_decay=0.0001)
+optimizer = dict(type='SGD', lr=0.002, momentum=0.9, weight_decay=0.0001)
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 # learning policy
 lr_config = dict(
     policy='step',
     warmup='linear',
-    warmup_iters=500,
+    warmup_iters=2000,
     warmup_ratio=1.0 / 3,
-    step=[8, 11])
+    step=[6, 8])
 checkpoint_config = dict(interval=1)
 # yapf:disable
 log_config = dict(
@@ -125,13 +125,13 @@ log_config = dict(
     ])
 # yapf:enable
 # runtime settings
-total_epochs = 12
+total_epochs = 9
 device_ids = range(8)
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
 work_dir = './work_dirs/solov2_attention_label_align/'
-# load_from = './work_dirs/solov2_attention_ssim/epoch_24.pth'
+load_from = './work_dirs/solov2_attention_label_align/stage1_epoch_12.pth'
 # load_from = '/home/dingyangyang/pretrained_models/solo2-lite3_bifpn.pth'
-load_from = None
+# load_from = None
 resume_from = None
 workflow = [('train', 1)]
