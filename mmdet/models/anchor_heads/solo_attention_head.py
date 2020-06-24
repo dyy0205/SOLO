@@ -208,7 +208,8 @@ class SOLOAttentionHead(nn.Module):
             if not eval:
                 ins_i = F.interpolate(ins_i, size=(featmap_sizes[i][0] * 2, featmap_sizes[i][1] * 2),
                                       mode='bilinear', align_corners=True)
-                # ins_i = ins_i
+                # ins_i = F.interpolate(ins_i, size=(featmap_sizes[i][0] * 2, featmap_sizes[i][1] * 2),
+                #                                       mode='bilinear', align_corners=True)
             else:
                 ins_i = ins_i.sigmoid()
             ins_pred.append(ins_i)
@@ -305,10 +306,9 @@ class SOLOAttentionHead(nn.Module):
             # print(pred.shape, mask.shape, gray_img.shape)
             if pred.size()[0] == 0:
                 continue
-            pred = torch.sigmoid(pred)
 
             # dice loss
-            loss_ins.append(dice_loss(pred, mask))
+            loss_ins.append(dice_loss(torch.sigmoid(pred), mask))
 
             # bce loss
             if self.loss_mask is not None:
@@ -317,8 +317,8 @@ class SOLOAttentionHead(nn.Module):
             # gradient boundary loss
             if self.loss_boundary is not None:
                 # boundary_mask = torch.stack([get_mask_contour(m) for m in mask], 0)
-                # loss_boundary += self.loss_boundary(gray_img, pred, boundary_mask)
-                loss_boundary += self.loss_boundary(gray_img, pred)
+                # loss_boundary += self.loss_boundary(gray_img, torch.sigmoid(pred), boundary_mask)
+                loss_boundary += self.loss_boundary(gray_img, torch.sigmoid(pred))
 
         loss_ins = torch.cat(loss_ins).mean()
         loss_ins = loss_ins * self.ins_loss_weight
@@ -430,10 +430,14 @@ class SOLOAttentionHead(nn.Module):
                                          size=featmap_size, mode='bilinear', align_corners=True)
                 seg_mask = torch.squeeze(seg_mask)
 
+                xmin, ymin, xmax, ymax = map(int, list(gt_bbox))
+                gray_gt = torch.zeros_like(gray_image)
+                gray_gt[ymin:ymax, xmin:xmax] = gray_image[ymin:ymax, xmin:xmax]
+
                 for i in range(top, down + 1):
                     for j in range(left, right + 1):
                         label = int(i * num_grid + j)
-                        img_label[label, :gray_image.shape[0], :gray_image.shape[1]] = gray_image
+                        img_label[label, :gray_gt.shape[0], :gray_gt.shape[1]] = gray_gt
                         ins_label[label, :seg_mask.shape[0], :seg_mask.shape[1]] = seg_mask
                         ins_ind_label[label] = True
             img_label_list.append(img_label)

@@ -4,9 +4,11 @@ import mmcv
 import numpy as np
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
+from pycocotools.cocoeval_segm import COCOeval_segm
 from terminaltables import AsciiTable
 
 from .recall import eval_recalls
+import os, cv2
 
 
 def coco_eval(result_files,
@@ -42,6 +44,88 @@ def coco_eval(result_files,
         img_ids = coco.getImgIds()
         iou_type = 'bbox' if res_type == 'proposal' else res_type
         cocoEval = COCOeval(coco, coco_dets, iou_type)
+        cocoEval.params.imgIds = img_ids
+        if res_type == 'proposal':
+            cocoEval.params.useCats = 0
+            cocoEval.params.maxDets = list(max_dets)
+        cocoEval.evaluate()
+        cocoEval.accumulate()
+        cocoEval.summarize()
+
+        if classwise:
+            # Compute per-category AP
+            # from https://github.com/facebookresearch/detectron2/blob/03064eb5bafe4a3e5750cc7a16672daf5afe8435/detectron2/evaluation/coco_evaluation.py#L259-L283 # noqa
+            precisions = cocoEval.eval['precision']
+            catIds = coco.getCatIds()
+            # precision has dims (iou, recall, cls, area range, max dets)
+            assert len(catIds) == precisions.shape[2]
+
+            results_per_category = []
+            for idx, catId in enumerate(catIds):
+                # area range index 0: all area ranges
+                # max dets index -1: typically 100 per image
+                nm = coco.loadCats(catId)[0]
+                precision = precisions[:, :, idx, 0, -1]
+                precision = precision[precision > -1]
+                ap = np.mean(precision) if precision.size else float('nan')
+                results_per_category.append(
+                    ('{}'.format(nm['name']),
+                     '{:0.3f}'.format(float(ap * 100))))
+
+            N_COLS = min(6, len(results_per_category) * 2)
+            results_flatten = list(itertools.chain(*results_per_category))
+            headers = ['category', 'AP'] * (N_COLS // 2)
+            results_2d = itertools.zip_longest(
+                *[results_flatten[i::N_COLS] for i in range(N_COLS)])
+            table_data = [headers]
+            table_data += [result for result in results_2d]
+            table = AsciiTable(table_data)
+            print(table.table)
+
+
+def coco_eval_segm(result_files,
+                   result_types,
+                   coco,
+                   cfg,
+                   max_dets=(100, 300, 1000),
+                   classwise=True):
+    for res_type in result_types:
+        assert res_type in [
+            'proposal', 'proposal_fast', 'bbox', 'segm', 'keypoints'
+        ]
+
+    if mmcv.is_str(coco):
+        coco = COCO(coco)
+    assert isinstance(coco, COCO)
+
+    if result_types == ['proposal_fast']:
+        ar = fast_eval_recall(result_files, coco, np.array(max_dets))
+        for i, num in enumerate(max_dets):
+            print('AR@{}\t= {:.4f}'.format(num, ar[i]))
+        return
+
+    for res_type in result_types:
+        if isinstance(result_files, str):
+            result_file = result_files
+        elif isinstance(result_files, dict):
+            result_file = result_files[res_type]
+        else:
+            assert TypeError('result_files must be a str or dict')
+        assert result_file.endswith('.json')
+
+        coco_dets = coco.loadRes(result_file)
+        img_ids = coco.getImgIds()
+        for img_id in img_ids:
+            if img_id >= 600000 and cfg.data.test.mask_dir:
+                ann_ids = coco.getAnnIds(imgIds=[img_id])
+                anns = coco.loadAnns(ann_ids)
+                for ann in anns:
+                    mask_path = os.path.join(cfg.data.test.mask_dir, str(ann['id']) + '.png')
+                    mask = cv2.imread(mask_path, 0)
+                    mask = (mask / 255.).astype(np.uint8)
+                    ann['segmentation'] = mask
+        iou_type = 'bbox' if res_type == 'proposal' else res_type
+        cocoEval = COCOeval_segm(coco, coco_dets, iou_type)
         cocoEval.params.imgIds = img_ids
         if res_type == 'proposal':
             cocoEval.params.useCats = 0

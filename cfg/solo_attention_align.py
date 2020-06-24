@@ -28,15 +28,16 @@ model = dict(
         loss_ins=dict(
             type='DiceLoss',
             use_sigmoid=True,
-            loss_weight=3.0),
+            loss_weight=2.0),
         # loss_mask=dict(
-        #     type='BCELoss',
-        #     loss_weight=6.0),
-        # loss_ssim=dict(
-        #     type='SSIMLoss',
-        #     window_size=11,
-        #     size_average=True,
-        #     loss_weight=4.0),
+        #     type='CrossEntropyLoss',
+        #     use_sigmoid=True,
+        #     loss_weight=3.0),
+        loss_ssim=dict(
+            type='SSIMLoss',
+            window_size=11,
+            size_average=True,
+            loss_weight=2.0),
         loss_cate=dict(
             type='FocalLoss',
             use_sigmoid=True,
@@ -63,7 +64,7 @@ train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations', with_bbox=True, with_mask=True),
     dict(type='Resize',
-         img_scale=[(832, 512), (832, 448), (832, 384)],
+         img_scale=[(512, 512), (448, 448), (384, 384)],
          multiscale_mode='value',
          keep_ratio=False),
     dict(type='RandomFlip', flip_ratio=0.5),
@@ -76,7 +77,7 @@ test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(
         type='MultiScaleFlipAug',
-        img_scale=(832, 512),
+        img_scale=(512, 512),
         flip=False,
         transforms=[
             dict(type='Resize', keep_ratio=False),
@@ -88,7 +89,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    imgs_per_gpu=7,
+    imgs_per_gpu=11,
     workers_per_gpu=2,
     train=dict(
         type=dataset_type,
@@ -106,15 +107,15 @@ data = dict(
         img_prefix=data_root + 'val2017/',
         pipeline=test_pipeline))
 # optimizer
-optimizer = dict(type='SGD', lr=0.002, momentum=0.9, weight_decay=0.0001)
+optimizer = dict(type='SGD', lr=0.004, momentum=0.9, weight_decay=0.0001)
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 # learning policy
 lr_config = dict(
-    policy='step',
+    policy='cosine',
     warmup='linear',
-    warmup_iters=2000,
+    warmup_iters=3000,
     warmup_ratio=1.0 / 3,
-    step=[6, 8])
+    step=[8, 11])
 checkpoint_config = dict(interval=1)
 # yapf:disable
 log_config = dict(
@@ -125,12 +126,12 @@ log_config = dict(
     ])
 # yapf:enable
 # runtime settings
-total_epochs = 9
+total_epochs = 12
 device_ids = range(8)
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
-work_dir = './work_dirs/solov2_attention_label_align/'
-load_from = './work_dirs/solov2_attention_label_align/stage1_epoch_12.pth'
+work_dir = './work_dirs/solov2_attention_label_align2_assim/'
+load_from = './work_dirs/solov2_attention_label_align2_assim/stage1_epoch_23_0.392.pth'
 # load_from = '/home/dingyangyang/pretrained_models/solo2-lite3_bifpn.pth'
 # load_from = None
 resume_from = None

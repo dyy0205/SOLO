@@ -1,7 +1,8 @@
 # model settings
 model = dict(
     type='SOLO',
-    pretrained='/home/dingyangyang/pretrained_models/tf_efficientnet_lite3_tuned.pth',
+    # pretrained='/home/dingyangyang/pretrained_models/tf_efficientnet_lite3_tuned.pth',
+    pretrained='./work_dirs/backbone_tuned/34-0.9869172348799823.pth',
     backbone=dict(
         type='EfficientNet_Lite',
         model_name='efficientnet-b3',
@@ -29,13 +30,14 @@ model = dict(
             type='DiceLoss',
             use_sigmoid=True,
             loss_weight=3.0),
-        loss_mask=dict(
-            type='CrossEntropyLoss',
-            use_sigmoid=True,
-            loss_weight=1.0),
-        loss_boundary=dict(
-            type='ImageGradientLoss',
-            loss_weight=1.0),
+        # loss_mask=dict(
+        #     type='BCELoss',
+        #     loss_weight=6.0),
+        # loss_ssim=dict(
+        #     type='SSIMLoss',
+        #     window_size=11,
+        #     size_average=True,
+        #     loss_weight=4.0),
         loss_cate=dict(
             type='FocalLoss',
             use_sigmoid=True,
@@ -87,16 +89,16 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    imgs_per_gpu=11,
+    imgs_per_gpu=10,
     workers_per_gpu=2,
     train=dict(
         type=dataset_type,
-        ann_file=data_root + 'train.json',
+        ann_file=data_root + 'train_aug.json',
         img_prefix=data_root + 'train2017/',
         pipeline=train_pipeline),
     val=dict(
         type=dataset_type,
-        ann_file=data_root + 'val.json',
+        ann_file=data_root + 'val_aug.json',
         img_prefix=data_root + 'val2017/',
         pipeline=test_pipeline),
     test=dict(
@@ -111,26 +113,24 @@ optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 lr_config = dict(
     policy='cosine',
     warmup='linear',
-    warmup_iters=2000,
+    warmup_iters=5000,
     warmup_ratio=1.0 / 3,
-    step=[2])
+    step=[8, 11])
 checkpoint_config = dict(interval=1)
 # yapf:disable
 log_config = dict(
-    interval=100,
+    interval=500,
     hooks=[
         dict(type='TextLoggerHook'),
         # dict(type='TensorboardLoggerHook')
     ])
 # yapf:enable
 # runtime settings
-total_epochs = 4
+total_epochs = 12
 device_ids = range(8)
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
-work_dir = './work_dirs/solov2_attention_boundary/'
-load_from = './work_dirs/solov2_attention_boundary/epoch_22_0.401.pth'
-# load_from = '/home/dingyangyang/pretrained_models/solo2-lite3_bifpn.pth'
-# load_from = None
+work_dir = './work_dirs/aug_from_scratch'
+load_from = './work_dirs/aug_from_scratch/epoch_24.pth'
 resume_from = None
 workflow = [('train', 1)]

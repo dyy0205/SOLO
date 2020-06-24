@@ -2,12 +2,12 @@ from mmdet.apis import init_detector, inference_detector, show_result_pyplot, sh
 import mmcv
 import os, glob, time
 
-config_file = 'cfg/solo_attention_align.py'
+config_file = 'cfg/aug_solov2_tuned.py'
 # download the checkpoint from model zoo and put it in `checkpoints/`
-checkpoint_file = './work_dirs/solov2_attention_label_align/epoch_9.pth'
+checkpoint_file = '/home/dingyangyang/pretrained_models/solo2-best.pth'
 
 # build the model from a config file and a checkpoint file
-model = init_detector(config_file, checkpoint_file, device='cuda:0')
+model = init_detector(config_file, checkpoint_file, device='cuda:3')
 
 # # test a single image
 # img = './WechatIMG14.jpeg'
@@ -15,9 +15,9 @@ model = init_detector(config_file, checkpoint_file, device='cuda:0')
 # show_result_ins(img, result, model.CLASSES, score_thr=0.25,
 #                     out_file='./WechatIMG14_out.jpeg')
 
-imgs = glob.glob('./test_imgs/*.*')
-# imgs = glob.glob('/home/versa/dataset/MSCOCO/train2017/*.*')
-save_dir = './test_align'
+# imgs = glob.glob('./test_imgs/*.*')
+imgs = glob.glob('/home/versa/dataset/MSCOCO/aug_seg/val_imgs/*.*')
+save_dir = './aug_seg'
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 

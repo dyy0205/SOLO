@@ -8,12 +8,14 @@ import torch.distributed as dist
 from mmcv.parallel import collate, scatter
 from mmcv.runner import Hook
 from pycocotools.cocoeval import COCOeval
+from pycocotools.cocoeval_segm import COCOeval_segm
 from torch.utils.data import Dataset
 
 from mmdet import datasets
 from .coco_utils import fast_eval_recall, results2json, results2json_segm
 from .mean_ap import eval_map
 import pycocotools.mask as mask_util
+import cv2
 
 
 def get_masks(result, num_classes=80):
@@ -223,6 +225,15 @@ class CocoDistEvalmAPHook_segm(DistEvalHook):
         res_types = ['segm']
         cocoGt = self.dataset.coco
         imgIds = cocoGt.getImgIds()
+        # for img_id in imgIds:
+        #     if img_id >= 600000 and self.dataset.mask_dir:
+        #         ann_ids = cocoGt.getAnnIds(imgIds=[img_id])
+        #         anns = cocoGt.loadAnns(ann_ids)
+        #         for ann in anns:
+        #             mask_path = os.path.join(self.dataset.mask_dir, str(ann['id']) + '.png')
+        #             mask = cv2.imread(mask_path, 0)
+        #             mask = (mask / 255.).astype(np.uint8)
+        #             ann['segmentation'] = mask
         for res_type in res_types:
             try:
                 cocoDt = cocoGt.loadRes(result_files[res_type])
@@ -230,6 +241,7 @@ class CocoDistEvalmAPHook_segm(DistEvalHook):
                 print('No prediction found.')
                 break
             iou_type = res_type
+            # cocoEval = COCOeval_segm(cocoGt, cocoDt, iou_type)
             cocoEval = COCOeval(cocoGt, cocoDt, iou_type)
             cocoEval.params.imgIds = imgIds
             cocoEval.evaluate()

@@ -79,81 +79,81 @@ if __name__ == '__main__':
                         name = xml.split('/')[-3][:12] + '_' + xml.split('/')[-1]
                         shutil.copy(xml, os.path.join(xml_dir, name))
 
-    # label_dir = '/Users/dyy/Desktop/human/labels/'
-    # save_dir = '/Users/dyy/Desktop/human/masks/'
-    # if not os.path.exists(save_dir):
-    #     os.makedirs(save_dir)
-    # label_list = glob.glob(os.path.join(label_dir, '*.png'))[:1]
-    # for i, label_name in enumerate(label_list):
-    #     print(i, label_name)
-    #     rgb2masks(label_name, save_dir)
-    #
-    # ROOT_DIR = '/Users/dyy/Desktop/human'
-    # IMAGE_DIR = os.path.join(ROOT_DIR, "images")
-    # ANNOTATION_DIR = os.path.join(ROOT_DIR, "masks")
-    #
-    # CATEGORIES = [
-    #     {
-    #         'supercategory': 'none',
-    #         'name': '0',
-    #         'id': 0
-    #     },
-    #     {
-    #         'supercategory': 'none',
-    #         'name': '1',
-    #         'id': 1
-    #     },
-    #     {
-    #         'supercategory': 'none',
-    #         'name': '2',
-    #         'id': 2
-    #     }
-    # ]
-    #
-    # coco_output = {
-    #     "images": [],
-    #     "annotations": [],
-    #     "categories": CATEGORIES
-    # }
-    #
-    # image_id = 1
-    # segmentation_id = 1
-    #
-    # # filter for jpeg images
-    # for root, _, files in os.walk(IMAGE_DIR):
-    #     image_files = filter_for_jpeg(root, files)
-    #
-    #     # go through each image
-    #     for image_filename in image_files:
-    #         image = Image.open(image_filename)
-    #         image_info = pycococreatortools.create_image_info(
-    #             image_id, os.path.basename(image_filename), image.size)
-    #         coco_output["images"].append(image_info)
-    #
-    #         # filter for associated png annotations
-    #         for root, _, files in os.walk(ANNOTATION_DIR):
-    #             annotation_files = filter_for_annotations(root, files, image_filename)
-    #
-    #             # go through each associated annotation
-    #             for annotation_filename in annotation_files:
-    #
-    #                 class_id = [x['id'] for x in CATEGORIES if x['name'] in annotation_filename][0]
-    #
-    #                 category_info = {'id': class_id, 'is_crowd': 'crowd' in image_filename}
-    #                 binary_mask = np.asarray(Image.open(annotation_filename)
-    #                                          .convert('1')).astype(np.uint8)
-    #
-    #                 annotation_info = pycococreatortools.create_annotation_info(
-    #                     segmentation_id, image_id, category_info, binary_mask,
-    #                     image.size, tolerance=2)
-    #
-    #                 if annotation_info is not None:
-    #                     coco_output["annotations"].append(annotation_info)
-    #
-    #                 segmentation_id = segmentation_id + 1
-    #
-    #         image_id = image_id + 1
-    #
-    # with open('{}/test.json'.format(ROOT_DIR), 'w') as output_json_file:
-    #     json.dump(coco_output, output_json_file)
+    label_dir = '/Users/dyy/Desktop/human/labels/'
+    save_dir = '/Users/dyy/Desktop/human/masks/'
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    label_list = glob.glob(os.path.join(label_dir, '*.png'))[:1]
+    for i, label_name in enumerate(label_list):
+        print(i, label_name)
+        rgb2masks(label_name, save_dir)
+
+    ROOT_DIR = '/Users/dyy/Desktop/human'
+    IMAGE_DIR = os.path.join(ROOT_DIR, "images")
+    ANNOTATION_DIR = os.path.join(ROOT_DIR, "masks")
+
+    CATEGORIES = [
+        {
+            'supercategory': 'none',
+            'name': '0',
+            'id': 0
+        },
+        {
+            'supercategory': 'none',
+            'name': '1',
+            'id': 1
+        },
+        {
+            'supercategory': 'none',
+            'name': '2',
+            'id': 2
+        }
+    ]
+
+    coco_output = {
+        "images": [],
+        "annotations": [],
+        "categories": CATEGORIES
+    }
+
+    image_id = 1
+    segmentation_id = 1
+
+    # filter for jpeg images
+    for root, _, files in os.walk(IMAGE_DIR):
+        image_files = filter_for_jpeg(root, files)
+
+        # go through each image
+        for image_filename in image_files:
+            image = Image.open(image_filename)
+            image_info = pycococreatortools.create_image_info(
+                image_id, os.path.basename(image_filename), image.size)
+            coco_output["images"].append(image_info)
+
+            # filter for associated png annotations
+            for root, _, files in os.walk(ANNOTATION_DIR):
+                annotation_files = filter_for_annotations(root, files, image_filename)
+
+                # go through each associated annotation
+                for annotation_filename in annotation_files:
+
+                    class_id = [x['id'] for x in CATEGORIES if x['name'] in annotation_filename][0]
+
+                    category_info = {'id': class_id, 'is_crowd': 'crowd' in image_filename}
+                    binary_mask = np.asarray(Image.open(annotation_filename)
+                                             .convert('1')).astype(np.uint8)
+
+                    annotation_info = pycococreatortools.create_annotation_info(
+                        segmentation_id, image_id, category_info, binary_mask,
+                        image.size, tolerance=2)
+
+                    if annotation_info is not None:
+                        coco_output["annotations"].append(annotation_info)
+
+                    segmentation_id = segmentation_id + 1
+
+            image_id = image_id + 1
+
+    with open('{}/test.json'.format(ROOT_DIR), 'w') as output_json_file:
+        json.dump(coco_output, output_json_file)
 

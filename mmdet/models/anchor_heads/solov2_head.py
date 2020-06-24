@@ -79,8 +79,7 @@ class SOLOV2Head(nn.Module):
         self._init_layers()
 
     def _init_layers(self):
-        # norm_cfg = dict(type='GN', num_groups=32, requires_grad=True)
-        norm_cfg = dict(type='BN', requires_grad=True)
+        norm_cfg = dict(type='GN', num_groups=32, requires_grad=True)
         self.feature_convs = nn.ModuleList()
         self.kernel_convs = nn.ModuleList()
         self.cate_convs = nn.ModuleList()
@@ -116,7 +115,7 @@ class SOLOV2Head(nn.Module):
                         bias=norm_cfg is None)
                     convs_per_level.add_module('conv' + str(j), one_conv)
                     one_upsample = nn.Upsample(
-                        scale_factor=2, mode='bilinear', align_corners=True)
+                        scale_factor=2, mode='bilinear', align_corners=False)
                     convs_per_level.add_module('upsample' + str(j), one_upsample)
                     continue
                 one_conv = ConvModule(
@@ -129,7 +128,7 @@ class SOLOV2Head(nn.Module):
                     bias=norm_cfg is None)
                 convs_per_level.add_module('conv' + str(j), one_conv)
                 one_upsample = nn.Upsample(
-                    scale_factor=2, mode='bilinear', align_corners=True)
+                    scale_factor=2, mode='bilinear', align_corners=False)
                 convs_per_level.add_module('upsample' + str(j), one_upsample)
             self.feature_convs.append(convs_per_level)
 
@@ -209,18 +208,18 @@ class SOLOV2Head(nn.Module):
             ins_i = F.conv2d(feature_pred, kernel, groups=N).view(N, self.seg_num_grids[i] ** 2, h, w)
             if not eval:
                 ins_i = F.interpolate(ins_i, size=(featmap_sizes[i][0] * 2, featmap_sizes[i][1] * 2),
-                                      mode='bilinear', align_corners=True)
+                                      mode='bilinear', align_corners=False)
             else:
                 ins_i = ins_i.sigmoid()
             ins_pred.append(ins_i)
         return ins_pred, cate_pred
 
     def split_feats(self, feats):
-        return (F.interpolate(feats[0], scale_factor=0.5, mode='bilinear', align_corners=True),
+        return (F.interpolate(feats[0], scale_factor=0.5, mode='bilinear', align_corners=False),
                 feats[1],
                 feats[2],
                 feats[3],
-                F.interpolate(feats[4], size=feats[3].shape[-2:], mode='bilinear', align_corners=True))
+                F.interpolate(feats[4], size=feats[3].shape[-2:], mode='bilinear', align_corners=False))
 
     def forward_single(self, x, idx, eval=False):
         kernel_feat = x
@@ -238,7 +237,7 @@ class SOLOV2Head(nn.Module):
         for i, kernel_layer in enumerate(self.kernel_convs):
             if i == self.cate_down_pos:
                 seg_num_grid = self.seg_num_grids[idx]
-                kernel_feat = F.interpolate(kernel_feat, size=seg_num_grid, mode='bilinear', align_corners=True)
+                kernel_feat = F.interpolate(kernel_feat, size=seg_num_grid, mode='bilinear', align_corners=False)
             kernel_feat = kernel_layer(kernel_feat)
         kernel_pred = self.solo_kernel(kernel_feat)
 
@@ -246,7 +245,7 @@ class SOLOV2Head(nn.Module):
         for i, cate_layer in enumerate(self.cate_convs):
             if i == self.cate_down_pos:
                 seg_num_grid = self.seg_num_grids[idx]
-                cate_feat = F.interpolate(cate_feat, size=seg_num_grid, mode='bilinear', align_corners=True)
+                cate_feat = F.interpolate(cate_feat, size=seg_num_grid, mode='bilinear', align_corners=False)
             cate_feat = cate_layer(cate_feat)
 
         cate_pred = self.solo_cate(cate_feat)
@@ -508,10 +507,10 @@ class SOLOV2Head(nn.Module):
         seg_preds = F.interpolate(seg_preds.unsqueeze(0),
                                   size=upsampled_size_out,
                                   mode='bilinear',
-                                  align_corners=True)[:, :, :h, :w]
+                                  align_corners=False)[:, :, :h, :w]
         seg_masks = F.interpolate(seg_preds,
                                   size=ori_shape[:2],
                                   mode='bilinear',
-                                  align_corners=True).squeeze(0)
+                                  align_corners=False).squeeze(0)
         seg_masks = seg_masks > cfg.mask_thr
         return seg_masks, cate_labels, cate_scores

@@ -11,7 +11,7 @@ import torch.distributed as dist
 from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
 from mmcv.runner import init_dist, get_dist_info, load_checkpoint
 
-from mmdet.core import coco_eval, results2json, results2json_segm, wrap_fp16_model, tensor2imgs, get_classes
+from mmdet.core import coco_eval, results2json, results2json_segm, wrap_fp16_model, coco_eval_segm
 from mmdet.datasets import build_dataloader, build_dataset
 from mmdet.models import build_detector
 import time
@@ -229,10 +229,12 @@ def main():
             if eval_types == ['proposal_fast']:
                 result_file = args.out
                 coco_eval(result_file, eval_types, dataset.coco)
+                # coco_eval_segm(result_file, eval_types, dataset.coco, cfg)
             else:
                 if not isinstance(outputs[0], dict):
                     result_files = results2json_segm(dataset, outputs, args.out)
                     coco_eval(result_files, eval_types, dataset.coco)
+                    # coco_eval_segm(result_files, eval_types, dataset.coco, cfg)
                 else:
                     for name in outputs[0]:
                         print('\nEvaluating {}'.format(name))
@@ -241,6 +243,7 @@ def main():
                         result_files = results2json(dataset, outputs_,
                                                     result_file)
                         coco_eval(result_files, eval_types, dataset.coco)
+                        # coco_eval_segm(result_files, eval_types, dataset.coco, cfg)
 
     # Save predictions in the COCO json format
     if args.json_out and rank == 0:

@@ -75,7 +75,7 @@ class SOLOAttentionHead(nn.Module):
         self.scale_ranges = scale_ranges
         self.loss_cate = build_loss(loss_cate)
         self.ins_loss_weight = loss_ins['loss_weight']
-        self.mask_loss_weight = loss_mask['loss_weight'] if loss_mask is not None else None
+        self.loss_mask = build_loss(loss_mask) if loss_mask is not None else None
         self.loss_ssim = build_loss(loss_ssim) if loss_ssim is not None else None
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
@@ -207,6 +207,8 @@ class SOLOAttentionHead(nn.Module):
             if not eval:
                 ins_i = F.interpolate(ins_i, size=(featmap_sizes[i][0] * 2, featmap_sizes[i][1] * 2),
                                       mode='bilinear', align_corners=True)
+                # ins_i = F.interpolate(ins_i, scale_factor=4, mode='bilinear', align_corners=True)
+                # ins_i = ins_i
             else:
                 ins_i = ins_i.sigmoid()
             ins_pred.append(ins_i)
@@ -294,11 +296,12 @@ class SOLOAttentionHead(nn.Module):
         loss_mask = 0
         loss_ssim = 0
         for input, target in zip(ins_preds, ins_labels):
+            # print(input.shape, target.shape)
             if input.size()[0] == 0:
                 continue
-            if self.mask_loss_weight is not None:
+            if self.loss_mask is not None:
                 # loss_mask += balanced_bce_loss(input, target)
-                loss_mask += F.binary_cross_entropy_with_logits(input, target.float())
+                loss_mask += self.loss_mask(input, target)
             loss_ins.append(dice_loss(torch.sigmoid(input), target))
             if self.loss_ssim is not None:
                 loss_ssim += self.loss_ssim(torch.sigmoid(input).unsqueeze(0),
@@ -306,9 +309,8 @@ class SOLOAttentionHead(nn.Module):
 
         loss_ins = torch.cat(loss_ins).mean()
         loss_ins = loss_ins * self.ins_loss_weight
-        if self.mask_loss_weight is not None:
+        if self.loss_mask is not None:
             loss_mask /= len(ins_labels)
-            loss_mask = loss_mask * self.mask_loss_weight
         if self.loss_ssim is not None:
             loss_ssim /= len(ins_labels)
 
@@ -328,11 +330,11 @@ class SOLOAttentionHead(nn.Module):
 
         loss_cate = self.loss_cate(flatten_cate_preds, flatten_cate_labels, avg_factor=num_ins + 1)
 
-        if self.mask_loss_weight is not None and self.loss_ssim is not None:
+        if self.loss_mask is not None and self.loss_ssim is not None:
             return dict(loss_ins=loss_ins, loss_mask=loss_mask, loss_ssim=loss_ssim, loss_cate=loss_cate)
-        elif self.mask_loss_weight is not None and self.loss_ssim is None:
+        elif self.loss_mask is not None and self.loss_ssim is None:
             return dict(loss_ins=loss_ins, loss_mask=loss_mask, loss_cate=loss_cate)
-        elif self.mask_loss_weight is None and self.loss_ssim is not None:
+        elif self.loss_mask is None and self.loss_ssim is not None:
             return dict(loss_ins=loss_ins, loss_ssim=loss_ssim, loss_cate=loss_cate)
         else:
             return dict(loss_ins=loss_ins, loss_cate=loss_cate)
@@ -398,9 +400,13 @@ class SOLOAttentionHead(nn.Module):
                 # ins
                 # seg_mask = mmcv.imrescale(seg_mask, scale=1. / output_stride)
                 # seg_mask = torch.Tensor(seg_mask)
+
                 seg_mask = F.interpolate(torch.from_numpy(seg_mask).unsqueeze(0).unsqueeze(0).float(),
-                                         scale_factor=1. / output_stride, mode='bilinear', align_corners=True)
+                                         size=featmap_size, mode='bilinear', align_corners=True)
                 seg_mask = torch.squeeze(seg_mask)
+
+                # seg_mask = torch.Tensor(seg_mask)
+
                 for i in range(top, down + 1):
                     for j in range(left, right + 1):
                         label = int(i * num_grid + j)

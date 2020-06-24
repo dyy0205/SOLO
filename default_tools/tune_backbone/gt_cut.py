@@ -33,9 +33,8 @@ def get_defect_patch(json_file, img_dir, save_dir):
                 cv2.imwrite(os.path.join(save_path, img_name[:-4]+'_'+str(j)+'.jpg'), patch)
 
 
-
 if __name__ == '__main__':
-    json_file = '/versa/dyy/coco/train.json'
-    img_dir = '/versa/dataset/COCO2017/coco/train2017/'
-    save_dir = '/versa/dyy/coco/train_gt'
+    json_file = '/home/versa/dataset/MSCOCO/train_aug.json'
+    img_dir = '/home/versa/dataset/MSCOCO/train2017/'
+    save_dir = '/home/versa/dataset/MSCOCO/train_gt'
     get_defect_patch(json_file, img_dir, save_dir)

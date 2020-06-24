@@ -1,28 +1,35 @@
+import os, cv2
 import numpy as np
 from pycocotools.coco import COCO
 
-from .custom import CustomDataset
+from .coco import CocoDataset
 from .registry import DATASETS
 
 
 @DATASETS.register_module
-class CocoDataset(CustomDataset):
+class CocoDatasetAug(CocoDataset):
 
-    # CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
-    #            'train', 'truck', 'boat', 'traffic_light', 'fire_hydrant',
-    #            'stop_sign', 'parking_meter', 'bench', 'bird', 'cat', 'dog',
-    #            'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',
-    #            'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
-    #            'skis', 'snowboard', 'sports_ball', 'kite', 'baseball_bat',
-    #            'baseball_glove', 'skateboard', 'surfboard', 'tennis_racket',
-    #            'bottle', 'wine_glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
-    #            'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',
-    #            'hot_dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
-    #            'potted_plant', 'bed', 'dining_table', 'toilet', 'tv', 'laptop',
-    #            'mouse', 'remote', 'keyboard', 'cell_phone', 'microwave',
-    #            'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
-    #            'vase', 'scissors', 'teddy_bear', 'hair_drier', 'toothbrush')
     CLASSES = ('person', 'cat', 'dog', 'cartoon')
+
+    def __init__(self,
+                 ann_file,
+                 pipeline,
+                 data_root=None,
+                 img_prefix='',
+                 seg_prefix=None,
+                 proposal_file=None,
+                 test_mode=False,
+                 filter_empty_gt=True,
+                 mask_dir=None):
+        super(CocoDatasetAug, self).__init__(ann_file,
+                                             pipeline,
+                                             data_root,
+                                             img_prefix,
+                                             seg_prefix,
+                                             proposal_file,
+                                             test_mode,
+                                             filter_empty_gt)
+        self.mask_dir = mask_dir
 
     def load_annotations(self, ann_file):
         self.coco = COCO(ann_file)
@@ -72,6 +79,7 @@ class CocoDataset(CustomDataset):
         gt_labels = []
         gt_bboxes_ignore = []
         gt_masks_ann = []
+        gt_ann_ids = []
 
         for i, ann in enumerate(ann_info):
             if ann.get('ignore', False):
@@ -85,7 +93,14 @@ class CocoDataset(CustomDataset):
             else:
                 gt_bboxes.append(bbox)
                 gt_labels.append(self.cat2label[ann['category_id']])
-                gt_masks_ann.append(ann['segmentation'])
+                gt_ann_ids.append(ann['id'])
+                if ann['segmentation'] == [] and self.mask_dir is not None:
+                    mask_path = os.path.join(self.mask_dir, str(ann['id']) + '.png')
+                    mask = cv2.imread(mask_path, 0)
+                    mask = (mask / 255.).astype(np.uint8)
+                    gt_masks_ann.append(mask)
+                else:
+                    gt_masks_ann.append(ann['segmentation'])
 
         if gt_bboxes:
             gt_bboxes = np.array(gt_bboxes, dtype=np.float32)
@@ -106,6 +121,7 @@ class CocoDataset(CustomDataset):
             labels=gt_labels,
             bboxes_ignore=gt_bboxes_ignore,
             masks=gt_masks_ann,
+            ann_ids=gt_ann_ids,
             seg_map=seg_map)
 
         return ann

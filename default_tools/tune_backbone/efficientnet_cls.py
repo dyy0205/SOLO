@@ -10,7 +10,6 @@ from torch.autograd import Variable
 import torch.optim as optim
 from torch.optim import lr_scheduler
 from torchvision import datasets, transforms
-from mmdet.models import EfficientNet
 from mmdet.models import EfficientNet_Lite
 
 
@@ -36,7 +35,7 @@ class EfficientNet_cls(EfficientNet_Lite):
 
 if __name__ == '__main__':
     model = EfficientNet_cls(model_name='efficientnet-b3', num_classes=4,
-                             pretrained='/versa/dyy/pretrained_models/tf_efficientnet_lite3_modifed.pth')
+                             pretrained='/home/dingyangyang/pretrained_models/tf_efficientnet_lite3_tuned.pth')
     # print(model)
     # for i, (k, v) in enumerate(model.state_dict().items()):
     #     print(i, k, v.shape)
@@ -44,7 +43,7 @@ if __name__ == '__main__':
     # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     # model = model.to(device)
     model.cuda()
-    # model = nn.DataParallel(model, device_ids=[0])
+    model = nn.DataParallel(model, device_ids=[0, 1, 2, 3])
 
     # Data augmentation and normalization for training
     # Just normalization for validation
@@ -52,6 +51,7 @@ if __name__ == '__main__':
         'train': transforms.Compose([
             transforms.RandomResizedCrop(224),
             transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.5),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ]),
@@ -62,12 +62,12 @@ if __name__ == '__main__':
         ]),
     }
 
-    data_dir = '/versa/dyy/coco'
+    data_dir = '/home/versa/dataset/MSCOCO'
     image_datasets = {x: datasets.ImageFolder(os.path.join(data_dir, x+'_gt'),
                                               data_transforms[x])
                       for x in ['train', 'val']}
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x],
-                                                  batch_size=200, num_workers=4,
+                                                  batch_size=512, num_workers=4,
                                                   shuffle=True if x == 'train' else False)
                    for x in ['train', 'val']}
     dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
@@ -139,8 +139,8 @@ if __name__ == '__main__':
                 best_acc = epoch_acc
                 best_model_wts = copy.deepcopy(model.state_dict())
 
-        torch.save(model.state_dict(),
-                   '/versa/dyy/SOLO/work_dirs/backbone/b3/tuned-{}-{}.pth'.format(epoch, epoch_acc))
+        torch.save(model.module.state_dict(),
+                   '/home/dingyangyang/SOLO/work_dirs/backbone_tuned/{}-{}.pth'.format(epoch, epoch_acc))
         print()
 
     time_elapsed = time.time() - since
@@ -150,5 +150,5 @@ if __name__ == '__main__':
 
     # load best model weights
     model.load_state_dict(best_model_wts)
-    torch.save(model.cpu().state_dict(),
-               '/versa/dyy/SOLO/work_dirs/backbone/b3/tuned-best-{}.pth'.format(best_acc))
+    torch.save(model.module.cpu().state_dict(),
+               '/home/dingyangyang/SOLO/work_dirs/backbone_tuned/best-{}.pth'.format(best_acc))
