@@ -273,6 +273,8 @@ def show_result_ins(img,
         cur_mask = seg_label[idx, :, :]
         cur_mask = mmcv.imresize(cur_mask, (w, h))
         cur_mask = (cur_mask > 0.5).astype(np.uint8)
+        # import cv2
+        # cv2.imwrite('/home/dingyangyang/SOLO/mask_plot/final_{}.jpg'.format(str(idx)), cur_mask*255)
         if cur_mask.sum() == 0:
             continue
         color_mask = color_masks[idx]
@@ -282,7 +284,7 @@ def show_result_ins(img,
         cur_cate = cate_label[idx]
         cur_score = cate_score[idx]
         label_text = class_names[cur_cate]
-        #label_text += '|{:.02f}'.format(cur_score)
+        # label_text += '|{:.02f}'.format(cur_score)
         center_y, center_x = ndimage.measurements.center_of_mass(cur_mask)
         vis_pos = (max(int(center_x) - 10, 0), int(center_y))
         cv2.putText(img_show, label_text, vis_pos,

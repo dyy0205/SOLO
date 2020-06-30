@@ -66,6 +66,14 @@ class SingleStageInsDetector(BaseDetector):
     def simple_test(self, img, img_meta, rescale=False):
         x = self.extract_feat(img)
         outs = self.bbox_head(x, eval=True)
+        # masks = outs[0][-1].squeeze()
+        # probs = outs[1][-1].view(-1, 4)
+        # for i in range(masks.shape[0]):
+        #     mask = masks[i].cpu().numpy()
+        #     mask = (mask > 0.5).astype(np.uint8) * 255
+        #     prob = max(probs[i].cpu().numpy())
+        #     import cv2
+        #     cv2.imwrite('/home/dingyangyang/SOLO/mask_plot/{}_{}.jpg'.format(str(i), str(round(prob, 4))), mask)
         seg_inputs = outs + (img_meta, self.test_cfg, rescale)
         seg_result = self.bbox_head.get_seg(*seg_inputs)
         return seg_result  

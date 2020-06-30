@@ -30,6 +30,17 @@ def dice_loss(input, target):
     return 1 - d
 
 
+def reversed_dice_loss(input1, input2):
+    input1 = input1.contiguous().view(input1.size()[0], -1)
+    input2 = input2.contiguous().view(input2.size()[0], -1)
+
+    a = torch.sum(input1 * input2, 1)
+    b = torch.sum(input1 * input1, 1) + 0.001
+    c = torch.sum(input2 * input2, 1) + 0.001
+    d = (2 * a) / (b + c)
+    return d
+
+
 def generalized_dice_loss(input, target):
     input = input.contiguous().view(input.size()[0], -1)
     target = target.contiguous().view(target.size()[0], -1).float()
@@ -43,7 +54,7 @@ def generalized_dice_loss(input, target):
 
 
 @HEADS.register_module
-class SOLOV2Head(nn.Module):
+class SOLOV2HeadADD(nn.Module):
 
     def __init__(self,
                  num_classes,
@@ -59,11 +70,8 @@ class SOLOV2Head(nn.Module):
                  loss_ins=None,
                  loss_cate=None,
                  conv_cfg=None,
-                 norm_cfg=None,
-                 use_dcn_in_tower=False,
-                 type_dcn=None,
-                 ):
-        super(SOLOV2Head, self).__init__()
+                 norm_cfg=None):
+        super(SOLOV2HeadADD, self).__init__()
         self.num_classes = num_classes
         self.seg_num_grids = num_grids
         self.cate_out_channels = self.num_classes - 1
@@ -79,8 +87,6 @@ class SOLOV2Head(nn.Module):
         self.ins_loss_weight = loss_ins['loss_weight']
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
-        self.use_dcn_in_tower = use_dcn_in_tower
-        self.type_dcn = type_dcn
         self._init_layers()
 
     def _init_layers(self):
@@ -138,11 +144,6 @@ class SOLOV2Head(nn.Module):
             self.feature_convs.append(convs_per_level)
 
         for i in range(self.stacked_convs):
-            if self.use_dcn_in_tower and i == self.stacked_convs - 1:
-                conv_cfg = dict(type=self.type_dcn)
-            else:
-                conv_cfg = self.conv_cfg
-
             chn = self.in_channels + 2 if i == 0 else self.seg_feat_channels
 
             self.kernel_convs.append(
@@ -152,7 +153,6 @@ class SOLOV2Head(nn.Module):
                     3,
                     stride=1,
                     padding=1,
-                    conv_cfg=conv_cfg,
                     norm_cfg=norm_cfg,
                     bias=norm_cfg is None))
             chn = self.in_channels if i == 0 else self.seg_feat_channels
@@ -163,7 +163,6 @@ class SOLOV2Head(nn.Module):
                     3,
                     stride=1,
                     padding=1,
-                    conv_cfg=conv_cfg,
                     norm_cfg=norm_cfg,
                     bias=norm_cfg is None))
         self.solo_kernel = nn.Conv2d(
@@ -277,14 +276,48 @@ class SOLOV2Head(nn.Module):
              gt_bboxes_ignore=None):
         featmap_sizes = [featmap.size()[-2:] for featmap in
                          ins_preds]
-        ins_label_list, cate_label_list, ins_ind_label_list = multi_apply(
-            self.solo_target_single,
+        bbox_label_list, ins_label_list, cate_label_list, ins_ind_label_list, ins_ind_flag_list = multi_apply(
+            self.solo_target_single_img,
             gt_bbox_list,
             gt_label_list,
             gt_mask_list,
             featmap_sizes=featmap_sizes)
 
+        loss_overlap = []
+        for ins_pred_img, ins_ind_flag_img in zip(zip(*ins_preds), ins_ind_flag_list):
+            # all levels
+            preds = []
+            count = 0
+            for ins_pred_level, ins_ind_flag_level in zip(ins_pred_img, ins_ind_flag_img):
+                num_ins_level = ins_ind_flag_level.max().item()
+                # inside one level
+                if num_ins_level >= 1:
+                    for i in range(1, num_ins_level + 1):
+                        ins_pred = ins_pred_level[(ins_ind_flag_level == i), ...]
+                        if ins_pred.shape[0] >= 1:
+                            ins_pred = ins_pred.mean(0, True)
+                            import cv2
+                            import numpy as np
+                            ins_pred_ = ins_pred.clone().sigmoid().squeeze().detach().cpu().numpy()
+                            ins_pred_ = (ins_pred_ > 0.5).astype(np.uint8) * 255
+                            cv2.imwrite(
+                                '/home/dingyangyang/SOLO/mask_plot/{}_{}.jpg'.format(str(count), str(i)), ins_pred_)
+                            preds.append(ins_pred)
+                count += 1
+            preds = [F.interpolate(pred.unsqueeze(0), size=(featmap_sizes[0][0], featmap_sizes[0][1]),
+                                   mode='bilinear', align_corners=False).squeeze(0) for pred in preds]
+            for i in range(len(preds)):
+                for j in range(i + 1, len(preds)):
+                    loss_overlap.append(reversed_dice_loss(
+                        torch.sigmoid(preds[i]), torch.sigmoid(preds[j])))
+        loss_overlap = torch.cat(loss_overlap).mean()
+
         # ins branch
+        bbox_labels = [torch.cat([bbox_labels_level_img[ins_ind_labels_level_img, ...]
+                                 for bbox_labels_level_img, ins_ind_labels_level_img in
+                                 zip(bbox_labels_level, ins_ind_labels_level)], 0)
+                      for bbox_labels_level, ins_ind_labels_level in zip(zip(*bbox_label_list), zip(*ins_ind_label_list))]
+
         ins_labels = [torch.cat([ins_labels_level_img[ins_ind_labels_level_img, ...]
                                  for ins_labels_level_img, ins_ind_labels_level_img in
                                  zip(ins_labels_level, ins_ind_labels_level)], 0)
@@ -305,13 +338,23 @@ class SOLOV2Head(nn.Module):
 
         # dice loss
         loss_ins = []
-        for input, target in zip(ins_preds, ins_labels):
+        loss_bbox = []
+        for input, target, bbox in zip(ins_preds, ins_labels, bbox_labels):
             if input.size()[0] == 0:
                 continue
             input = torch.sigmoid(input)
             loss_ins.append(dice_loss(input, target))
+
+            # blank_mask = torch.ones_like(input)
+            # for i in range(input.shape[0]):
+            #     x1, y1, x2, y2 = list(map(int, bbox[i]))
+            #     blank_mask[i][y1:y2, x1:x2] = 0.
+            # loss_bbox.append(reversed_dice_loss(input, blank_mask))
+
         loss_ins = torch.cat(loss_ins).mean()
         loss_ins = loss_ins * self.ins_loss_weight
+        # loss_bbox = torch.cat(loss_bbox).mean()
+        # loss_bbox = loss_bbox * self.ins_loss_weight
 
         # cate branch
         cate_labels = [
@@ -329,13 +372,13 @@ class SOLOV2Head(nn.Module):
 
         loss_cate = self.loss_cate(flatten_cate_preds, flatten_cate_labels, avg_factor=num_ins + 1)
 
-        return dict(loss_ins=loss_ins, loss_cate=loss_cate)
+        return dict(loss_ins=loss_ins, loss_overlap=loss_overlap, loss_cate=loss_cate)
 
-    def solo_target_single(self,
-                           gt_bboxes_raw,
-                           gt_labels_raw,
-                           gt_masks_raw,
-                           featmap_sizes=None):
+    def solo_target_single_img(self,
+                               gt_bboxes_raw,
+                               gt_labels_raw,
+                               gt_masks_raw,
+                               featmap_sizes=None):
 
         device = gt_labels_raw[0].device
 
@@ -343,21 +386,27 @@ class SOLOV2Head(nn.Module):
         gt_areas = torch.sqrt((gt_bboxes_raw[:, 2] - gt_bboxes_raw[:, 0]) * (
                 gt_bboxes_raw[:, 3] - gt_bboxes_raw[:, 1]))
 
+        bbox_label_list = []
         ins_label_list = []
         cate_label_list = []
         ins_ind_label_list = []
+        ins_ind_flag_list = []
         for (lower_bound, upper_bound), stride, featmap_size, num_grid \
                 in zip(self.scale_ranges, self.strides, featmap_sizes, self.seg_num_grids):
 
+            bbox_label = torch.zeros([num_grid ** 2, 4], dtype=torch.float32, device=device)
             ins_label = torch.zeros([num_grid ** 2, featmap_size[0], featmap_size[1]], dtype=torch.uint8, device=device)
             cate_label = torch.zeros([num_grid, num_grid], dtype=torch.int64, device=device)
             ins_ind_label = torch.zeros([num_grid ** 2], dtype=torch.bool, device=device)
+            ins_ind_flag = torch.zeros([num_grid ** 2], dtype=torch.int64, device=device)
 
             hit_indices = ((gt_areas >= lower_bound) & (gt_areas <= upper_bound)).nonzero().flatten()
             if len(hit_indices) == 0:
+                bbox_label_list.append(bbox_label)
                 ins_label_list.append(ins_label)
                 cate_label_list.append(cate_label)
                 ins_ind_label_list.append(ins_ind_label)
+                ins_ind_flag_list.append(ins_ind_flag)
                 continue
             gt_bboxes = gt_bboxes_raw[hit_indices]
             gt_labels = gt_labels_raw[hit_indices]
@@ -367,8 +416,8 @@ class SOLOV2Head(nn.Module):
             half_hs = 0.5 * (gt_bboxes[:, 3] - gt_bboxes[:, 1]) * self.sigma
 
             output_stride = stride / 2
-
-            for seg_mask, gt_label, half_h, half_w in zip(gt_masks, gt_labels, half_hs, half_ws):
+            ins_flag = 1
+            for gt_bbox, seg_mask, gt_label, half_h, half_w in zip(gt_bboxes, gt_masks, gt_labels, half_hs, half_ws):
                 if seg_mask.sum() < 10:
                     continue
                 # mass center
@@ -385,7 +434,7 @@ class SOLOV2Head(nn.Module):
 
                 top = max(top_box, coord_h - 1)
                 down = min(down_box, coord_h + 1)
-                left = max(coord_w - 1, left_box)
+                left = max(left_box, coord_w - 1)
                 right = min(right_box, coord_w + 1)
 
                 cate_label[top:(down + 1), left:(right + 1)] = gt_label
@@ -395,12 +444,17 @@ class SOLOV2Head(nn.Module):
                 for i in range(top, down + 1):
                     for j in range(left, right + 1):
                         label = int(i * num_grid + j)
+                        bbox_label[label] = gt_bbox / output_stride
                         ins_label[label, :seg_mask.shape[0], :seg_mask.shape[1]] = seg_mask
                         ins_ind_label[label] = True
+                        ins_ind_flag[label] = ins_flag
+                ins_flag += 1
+            bbox_label_list.append(bbox_label)
             ins_label_list.append(ins_label)
             cate_label_list.append(cate_label)
             ins_ind_label_list.append(ins_ind_label)
-        return ins_label_list, cate_label_list, ins_ind_label_list
+            ins_ind_flag_list.append(ins_ind_flag)
+        return bbox_label_list, ins_label_list, cate_label_list, ins_ind_label_list, ins_ind_flag_list
 
     def get_seg(self,
                 seg_preds,

@@ -1,36 +1,25 @@
 # model settings
 model = dict(
     type='SOLO',
-    pretrained='/home/dingyangyang/pretrained-models/resnet50-19c8e357.pth',
+    pretrained='./work_dirs/backbone_tuned/34-0.9869172348799823.pth',
     backbone=dict(
-        type='ResNet',
-        depth=50,
-        num_stages=4,
-        out_indices=(0, 1, 2, 3),
-        frozen_stages=1,
-        style='pytorch',
-        dcn=dict(
-            type='DCNv2',
-            deformable_groups=4,
-            fallback_on_stride=False),
-        stage_with_dcn=(False, True, True, True)),
+        type='EfficientNet_Lite',
+        model_name='efficientnet-b3',
+        num_stages=7,
+        out_indices=(1, 2, 4, 6),  # C2, C3, C4, C5
+        frozen_stages=-1),
     neck=dict(
-        type='FPN',
-        in_channels=[256, 512, 1024, 2048],
-        out_channels=256,
-        num_outs=5),
-    # neck=dict(
-    #     type='BiFPN_Lite',  # P2 ~ P6
-    #     is_efficientnet=False,
-    #     num_repeats=1,
-    #     in_channels=[256, 512, 1024, 2048],
-    #     out_channels=256),
+        type='BiFPN_Lite',  # P2 ~ P6
+        compound_coef=3,
+        num_repeats=1,
+        out_channels=160,
+        freeze_params=False),
     bbox_head=dict(
         type='SOLOV2Head',
         num_classes=5,
-        in_channels=256,
+        in_channels=160,
         stacked_convs=4,
-        seg_feat_channels=256,
+        seg_feat_channels=160,
         strides=[8, 8, 16, 32, 32],
         scale_ranges=((1, 64), (32, 128), (64, 256), (128, 512), (256, 2048)),
         sigma=0.2,
@@ -66,10 +55,9 @@ train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations', with_bbox=True, with_mask=True),
     dict(type='Resize',
-         img_scale=[(852, 512), (852, 480), (852, 448),
-                    (852, 416), (852, 384), (852, 352)],
+         img_scale=[(832, 512), (832, 448), (832, 384)],
          multiscale_mode='value',
-         keep_ratio=True),
+         keep_ratio=False),
     dict(type='RandomFlip', flip_ratio=0.5),
     dict(type='Normalize', **img_norm_cfg),
     dict(type='Pad', size_divisor=32),
@@ -80,10 +68,10 @@ test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(
         type='MultiScaleFlipAug',
-        img_scale=(852, 512),
+        img_scale=(832, 512),
         flip=False,
         transforms=[
-            dict(type='Resize', keep_ratio=True),
+            dict(type='Resize', keep_ratio=False),
             dict(type='RandomFlip'),
             dict(type='Normalize', **img_norm_cfg),
             dict(type='Pad', size_divisor=32),
@@ -92,7 +80,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    imgs_per_gpu=20,
+    imgs_per_gpu=8,
     workers_per_gpu=2,
     train=dict(
         type=dataset_type,
@@ -110,30 +98,30 @@ data = dict(
         img_prefix=data_root + 'val2017/',
         pipeline=test_pipeline))
 # optimizer
-optimizer = dict(type='SGD', lr=0.4, momentum=0.9, weight_decay=0.0001)
+optimizer = dict(type='SGD', lr=0.001, momentum=0.9, weight_decay=0.0001)
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 # learning policy
 lr_config = dict(
-    policy='step',
+    policy='cosine',
     warmup='linear',
-    warmup_iters=500,
+    warmup_iters=15000,
     warmup_ratio=1.0 / 3,
-    step=[16, 22])
+    step=[8, 11])
 checkpoint_config = dict(interval=1)
 # yapf:disable
 log_config = dict(
-    interval=500,
+    interval=200,
     hooks=[
         dict(type='TextLoggerHook'),
         # dict(type='TensorboardLoggerHook')
     ])
 # yapf:enable
 # runtime settings
-total_epochs = 24
+total_epochs = 12
 device_ids = range(8)
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
-work_dir = './work_dirs/aug_solov2_r50'
-load_from = None
+work_dir = './work_dirs/aug_solov2_scratch_at'
+load_from = './work_dirs/aug_solov2_scratch/epoch_24.pth'
 resume_from = None
 workflow = [('train', 1)]
