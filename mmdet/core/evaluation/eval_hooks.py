@@ -8,7 +8,7 @@ import torch.distributed as dist
 from mmcv.parallel import collate, scatter
 from mmcv.runner import Hook
 from pycocotools.cocoeval import COCOeval
-from pycocotools.cocoeval_segm import COCOeval_segm
+# from pycocotools.cocoeval_segm import COCOeval_segm
 from torch.utils.data import Dataset
 
 from mmdet import datasets

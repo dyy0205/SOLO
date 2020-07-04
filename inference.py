@@ -17,7 +17,7 @@ model = init_detector(config_file, checkpoint_file, device='cuda:0')
 
 imgs = glob.glob('./test_imgs/*.*')
 # imgs = ['./test_imgs/14755.jpg']
-# imgs = glob.glob('/home/versa/dataset/MSCOCO/aug_seg/val_imgs/*.*')
+imgs = glob.glob('/home/versa/dataset/MSCOCO/aug_seg/val_imgs/*.*')
 save_dir = './aug_solov2_add'
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)

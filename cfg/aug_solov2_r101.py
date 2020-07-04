@@ -1,7 +1,6 @@
 # model settings
 model = dict(
     type='SOLO',
-    # pretrained='/home/dingyangyang/pretrained_models/resnet50-19c8e357.pth',
     pretrained='torchvision://resnet101',
     backbone=dict(
         type='ResNet',
@@ -22,12 +21,6 @@ model = dict(
         out_channels=256,
         start_level=0,
         num_outs=5),
-    # neck=dict(
-    #     type='BiFPN_Lite',  # P2 ~ P6
-    #     is_efficientnet=False,
-    #     num_repeats=1,
-    #     in_channels=[256, 512, 1024, 2048],
-    #     out_channels=256),
     bbox_head=dict(
         type='SOLOV2Head',
         num_classes=5,
