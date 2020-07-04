@@ -68,6 +68,7 @@ class SOLOV2HeadADD(nn.Module):
                  num_grids=None,
                  cate_down_pos=0,
                  loss_ins=None,
+                 loss_overlap=None,
                  loss_cate=None,
                  conv_cfg=None,
                  norm_cfg=None):
@@ -85,6 +86,7 @@ class SOLOV2HeadADD(nn.Module):
         self.scale_ranges = scale_ranges
         self.loss_cate = build_loss(loss_cate)
         self.ins_loss_weight = loss_ins['loss_weight']
+        self.overlap_loss_weight = loss_overlap['loss_weight']
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
         self._init_layers()
@@ -283,6 +285,7 @@ class SOLOV2HeadADD(nn.Module):
             gt_mask_list,
             featmap_sizes=featmap_sizes)
 
+        img_count = 0
         loss_overlap = []
         for ins_pred_img, ins_ind_flag_img in zip(zip(*ins_preds), ins_ind_flag_list):
             # all levels
@@ -296,12 +299,14 @@ class SOLOV2HeadADD(nn.Module):
                         ins_pred = ins_pred_level[(ins_ind_flag_level == i), ...]
                         if ins_pred.shape[0] >= 1:
                             ins_pred = ins_pred.mean(0, True)
-                            import cv2
-                            import numpy as np
-                            ins_pred_ = ins_pred.clone().sigmoid().squeeze().detach().cpu().numpy()
-                            ins_pred_ = (ins_pred_ > 0.5).astype(np.uint8) * 255
-                            cv2.imwrite(
-                                '/home/dingyangyang/SOLO/mask_plot/{}_{}.jpg'.format(str(count), str(i)), ins_pred_)
+                            # import cv2
+                            # import numpy as np
+                            # ins_pred_ = ins_pred.clone().sigmoid()
+                            # ins_pred_ = F.interpolate(ins_pred_.unsqueeze(0), size=(featmap_sizes[0][0], featmap_sizes[0][1]),
+                            #        mode='bilinear', align_corners=False).squeeze().detach().cpu().numpy()
+                            # ins_pred_ = (ins_pred_ > 0.5).astype(np.uint8) * 255
+                            # cv2.imwrite(
+                            #     '/versa/dyy/SOLO/mask_plot/{}_{}_{}.jpg'.format(str(img_count), str(count), str(i)), ins_pred_)
                             preds.append(ins_pred)
                 count += 1
             preds = [F.interpolate(pred.unsqueeze(0), size=(featmap_sizes[0][0], featmap_sizes[0][1]),
@@ -310,7 +315,12 @@ class SOLOV2HeadADD(nn.Module):
                 for j in range(i + 1, len(preds)):
                     loss_overlap.append(reversed_dice_loss(
                         torch.sigmoid(preds[i]), torch.sigmoid(preds[j])))
-        loss_overlap = torch.cat(loss_overlap).mean()
+            img_count += 1
+        if len(loss_overlap) > 0:
+            loss_overlap = torch.cat(loss_overlap).mean()
+            loss_overlap = loss_overlap * self.overlap_loss_weight
+        else:
+            loss_overlap = torch.tensor(0., dtype=torch.float32, device=ins_preds[0].device)
 
         # ins branch
         bbox_labels = [torch.cat([bbox_labels_level_img[ins_ind_labels_level_img, ...]
