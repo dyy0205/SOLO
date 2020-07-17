@@ -274,7 +274,7 @@ def show_result_ins(img,
         cur_mask = mmcv.imresize(cur_mask, (w, h))
         cur_mask = (cur_mask > 0.5).astype(np.uint8)
         # import cv2
-        # cv2.imwrite('/home/dingyangyang/SOLO/mask_plot/final_{}.jpg'.format(str(idx)), cur_mask*255)
+        # cv2.imwrite('/home/dingyangyang/SOLO/final_{}.jpg'.format(str(idx)), cur_mask*255)
         if cur_mask.sum() == 0:
             continue
         color_mask = color_masks[idx]

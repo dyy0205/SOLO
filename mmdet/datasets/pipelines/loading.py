@@ -117,24 +117,6 @@ class LoadAnnotations(object):
 
 
 @PIPELINES.register_module
-class LoadAnnotationsAug(LoadAnnotations):
-
-    def _load_masks(self, results):
-        h, w = results['img_info']['height'], results['img_info']['width']
-        gt_masks = results['ann_info']['masks']
-        gt_ids = results['ann_info']['ann_ids']
-        gt_masks_ = []
-        for id, mask in zip(gt_ids, gt_masks):
-            if self.poly2mask and id < int(1e13):
-                gt_masks_.append(self._poly2mask(mask, h, w))
-            else:
-                gt_masks_.append(mask)
-        results['gt_masks'] = gt_masks_
-        results['mask_fields'].append('gt_masks')
-        return results
-
-
-@PIPELINES.register_module
 class LoadProposals(object):
 
     def __init__(self, num_max_proposals=None):

@@ -58,6 +58,7 @@ class SOLOV2Head(nn.Module):
                  cate_down_pos=0,
                  loss_ins=None,
                  loss_cate=None,
+                 loss_ssim=None,
                  conv_cfg=None,
                  norm_cfg=None,
                  use_dcn_in_tower=False,
@@ -77,6 +78,7 @@ class SOLOV2Head(nn.Module):
         self.scale_ranges = scale_ranges
         self.loss_cate = build_loss(loss_cate)
         self.ins_loss_weight = loss_ins['loss_weight']
+        self.loss_ssim = build_loss(loss_ssim) if loss_ssim is not None else None
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
         self.use_dcn_in_tower = use_dcn_in_tower
@@ -305,13 +307,19 @@ class SOLOV2Head(nn.Module):
 
         # dice loss
         loss_ins = []
+        loss_ssim = 0
         for input, target in zip(ins_preds, ins_labels):
             if input.size()[0] == 0:
                 continue
             input = torch.sigmoid(input)
             loss_ins.append(dice_loss(input, target))
+            if self.loss_ssim is not None:
+                loss_ssim += self.loss_ssim(input.unsqueeze(0), target.float().unsqueeze(0))
+
         loss_ins = torch.cat(loss_ins).mean()
         loss_ins = loss_ins * self.ins_loss_weight
+        if self.loss_ssim is not None:
+            loss_ssim /= len(ins_labels)
 
         # cate branch
         cate_labels = [
@@ -329,7 +337,10 @@ class SOLOV2Head(nn.Module):
 
         loss_cate = self.loss_cate(flatten_cate_preds, flatten_cate_labels, avg_factor=num_ins + 1)
 
-        return dict(loss_ins=loss_ins, loss_cate=loss_cate)
+        if self.loss_ssim is not None:
+            return dict(loss_ins=loss_ins, loss_ssim=loss_ssim, loss_cate=loss_cate)
+        else:
+            return dict(loss_ins=loss_ins, loss_cate=loss_cate)
 
     def solo_target_single(self,
                            gt_bboxes_raw,

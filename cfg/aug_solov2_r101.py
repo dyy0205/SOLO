@@ -1,19 +1,19 @@
 # model settings
 model = dict(
     type='SOLO',
-    pretrained='torchvision://resnet101',
+    # pretrained='torchvision://resnet101',
     backbone=dict(
         type='ResNet',
         depth=101,
         num_stages=4,
         out_indices=(0, 1, 2, 3),
-        frozen_stages=1,
+        frozen_stages=-1,
         style='pytorch',
-        dcn=dict(
-            type='DCN',
-            deformable_groups=1,
-            fallback_on_stride=False),
-        stage_with_dcn=(False, True, True, True)
+        # dcn=dict(
+        #     type='DCN',
+        #     deformable_groups=1,
+        #     fallback_on_stride=False),
+        # stage_with_dcn=(False, True, True, True)
         ),
     neck=dict(
         type='FPN',
@@ -38,6 +38,11 @@ model = dict(
             type='DiceLoss',
             use_sigmoid=True,
             loss_weight=3.0),
+        loss_ssim=dict(
+            type='SSIMLoss',
+            window_size=11,
+            size_average=True,
+            loss_weight=2.0),
         loss_cate=dict(
             type='FocalLoss',
             use_sigmoid=True,
@@ -90,7 +95,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    imgs_per_gpu=10,
+    imgs_per_gpu=8,
     workers_per_gpu=2,
     train=dict(
         type=dataset_type,
@@ -104,19 +109,19 @@ data = dict(
         pipeline=test_pipeline),
     test=dict(
         type=dataset_type,
-        ann_file=data_root + 'val_aug.json',
+        ann_file=data_root + 'val.json',
         img_prefix=data_root + 'val2017/',
         pipeline=test_pipeline))
 # optimizer
-optimizer = dict(type='SGD', lr=0.04, momentum=0.9, weight_decay=0.0001)
+optimizer = dict(type='SGD', lr=0.001, momentum=0.9, weight_decay=0.0001)
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 # learning policy
 lr_config = dict(
-    policy='step',
+    policy='cosine',
     warmup='linear',
-    warmup_iters=500,
+    warmup_iters=15000,
     warmup_ratio=1.0 / 3,
-    step=[27, 33])
+    step=[8, 11])
 checkpoint_config = dict(interval=1)
 # yapf:disable
 log_config = dict(
@@ -127,11 +132,12 @@ log_config = dict(
     ])
 # yapf:enable
 # runtime settings
-total_epochs = 36
+total_epochs = 12
 device_ids = range(8)
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
-work_dir = './work_dirs/aug_solov2_r101_dcn'
-load_from = None
+work_dir = './work_dirs/aug_solov2_r101_tuned_ssim'
+load_from = './work_dirs/aug_solov2_r101_tuned_dcn/epoch_12.pth'
+# load_from = '../pretrained_models/solov2_r101_3x.pth'
 resume_from = None
 workflow = [('train', 1)]

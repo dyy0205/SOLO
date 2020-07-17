@@ -7,13 +7,12 @@ from .test_aug import MultiScaleFlipAug
 from .transforms import (Albu, Expand, MinIoURandomCrop, Normalize, Pad,
                          PhotoMetricDistortion, RandomCrop, RandomFlip, Resize,
                          SegRescale, Resizer)
-from .loading import LoadAnnotationsAug
+from .imgaug import ImgAug
 
 __all__ = [
     'Compose', 'to_tensor', 'ToTensor', 'ImageToTensor', 'ToDataContainer',
     'Transpose', 'Collect', 'LoadAnnotations', 'LoadImageFromFile',
     'LoadProposals', 'MultiScaleFlipAug', 'Resize', 'RandomFlip', 'Pad',
     'RandomCrop', 'Normalize', 'SegRescale', 'MinIoURandomCrop', 'Expand',
-    'PhotoMetricDistortion', 'Albu', 'InstaBoost', 'Resizer',
-    'LoadAnnotationsAug'
+    'PhotoMetricDistortion', 'Albu', 'InstaBoost', 'Resizer', 'ImgAug'
 ]

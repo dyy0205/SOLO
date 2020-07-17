@@ -15,13 +15,14 @@ model = dict(
         out_channels=160,
         freeze_params=False),
     bbox_head=dict(
-        type='SOLOV2Head',
+        type='SOLOV2HeadADD',
         num_classes=5,
         in_channels=160,
         stacked_convs=4,
         seg_feat_channels=160,
         strides=[8, 8, 16, 32, 32],
-        scale_ranges=((1, 64), (32, 128), (64, 256), (128, 512), (256, 2048)),
+        # scale_ranges=((1, 64), (32, 128), (64, 256), (128, 512), (256, 2048)),
+        scale_ranges=((1, 64), (64, 128), (128, 256), (256, 512), (512, 2048)),
         sigma=0.2,
         num_grids=[40, 36, 24, 16, 12],
         cate_down_pos=0,
@@ -29,6 +30,10 @@ model = dict(
             type='DiceLoss',
             use_sigmoid=True,
             loss_weight=3.0),
+        loss_overlap=dict(
+            type='ReversedDiceLoss',
+            use_sigmoid=True,
+            loss_weight=10.0),
         loss_cate=dict(
             type='FocalLoss',
             use_sigmoid=True,
@@ -98,7 +103,7 @@ data = dict(
         img_prefix=data_root + 'val2017/',
         pipeline=test_pipeline))
 # optimizer
-optimizer = dict(type='SGD', lr=0.001, momentum=0.9, weight_decay=0.0001)
+optimizer = dict(type='SGD', lr=1e-4, momentum=0.9, weight_decay=0.0001)
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 # learning policy
 lr_config = dict(
