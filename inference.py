@@ -2,18 +2,18 @@ from mmdet.apis import init_detector, inference_detector, show_result_pyplot, sh
 import mmcv
 import os, glob, time
 
-config_file = 'cfg/aug_solov2_r101_imgaug.py'
+config_file = './cfg/aug_solov2_r101_imgaug.py'
 # download the checkpoint from model zoo and put it in `checkpoints/`
-checkpoint_file = './work_dirs/aug_solov2_r101_tuned_ssim/epoch_12.pth'
+checkpoint_file = '/workspace/solo/workdir/solov2_r101_ssim.pth'
 
 # build the model from a config file and a checkpoint file
 model = init_detector(config_file, checkpoint_file, device='cuda:0')
 
 # test a single image
-img = './IMG_8840.jpg'
+img = '/workspace/solo/test/00001.jpg'
 result, cost_time = inference_detector(model, img)
 show_result_ins(img, result, model.CLASSES, score_thr=0.14,
-                    out_file='./IMG_8840_out.jpg')
+                    out_file='/workspace/solo/result/00001_out.jpg')
 
 # imgs = glob.glob('./test_imgs/*.*')
 # # imgs = glob.glob('/home/versa/dataset/MSCOCO/aug_seg/val_imgs/*.*')

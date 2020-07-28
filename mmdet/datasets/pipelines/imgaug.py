@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-np.random.bit_generator = np.random._bit_generator
+# np.random.bit_generator = np.random._bit_generator
 from PIL import Image
 import imgaug as ia
 import imgaug.augmenters as iaa
