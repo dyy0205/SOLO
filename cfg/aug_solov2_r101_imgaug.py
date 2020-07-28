@@ -110,7 +110,7 @@ data = dict(
         pipeline=test_pipeline),
     test=dict(
         type=dataset_type,
-        ann_file=data_root + 'val.json',
+        ann_file=data_root + 'val_aug.json',
         img_prefix=data_root + 'val2017/',
         pipeline=test_pipeline))
 # optimizer
@@ -140,5 +140,5 @@ log_level = 'INFO'
 work_dir = './work_dirs/aug_solov2_r101_imgaug'
 load_from = './work_dirs/aug_solov2_r101_tuned_ssim/epoch_12.pth'
 # load_from = '../pretrained_models/solov2_r101_3x.pth'
-resume_from = None
+resume_from = './work_dirs/aug_solov2_r101_imgaug/epoch_1.pth'
 workflow = [('train', 1)]
