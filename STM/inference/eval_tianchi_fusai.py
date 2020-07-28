@@ -8,17 +8,21 @@ import torch.nn.functional as F
 import torch.nn.init as init
 import torch.utils.model_zoo as model_zoo
 from torchvision import models
+from mmdet.apis import init_detector, inference_detector, show_result_pyplot, show_result_ins
+import mmcv
+import os, glob, time
 
 import datetime
 import os
 import glob
 from PIL import Image
+import cv2
 import numpy as np
 import zipfile
 
 ### My libs
-from STM.dataset import TIANCHI
 from STM.models.model import STM
+from STM.dataset import TIANCHI
 
 torch.set_grad_enabled(False)  # Volatile
 
@@ -61,6 +65,7 @@ def Run_video(Fs, Ms, num_frames, Mem_every=None, Mem_number=None):
     pred = torch.round(Es.float())
 
     return pred, Es
+
 
 def blend_results(tmp_dir, merge_dir, data_dir):
     img_root = os.path.join(data_dir, 'JPEGImages')
@@ -110,6 +115,7 @@ def blend_results(tmp_dir, merge_dir, data_dir):
                 mask.putpalette(palette)
                 mask.save(os.path.join(video_dir, '{:05d}.png'.format(t)))
 
+
 def zip_result(result_dir, save_path):
     f = zipfile.ZipFile(os.path.join(save_path, 'submit.zip'), 'w', zipfile.ZIP_DEFLATED)
     for dir_path, dir_name, file_names in os.walk(result_dir):
@@ -119,14 +125,8 @@ def zip_result(result_dir, save_path):
             f.write(os.path.join(dir_path, file_name), file_path + file_name)
     f.close()
 
-if __name__ == '__main__':
-    GPU = '0'
-    DATA_ROOT = '../data'
-    MODEL_PATH = '../user_data/model_data/model.pth'
-    SAVE_PATH = '../prediction_result'
-    TMP_PATH = '../user_data/tmp_data'
-    MERGE_PATH = '../user_data/merge_data'
 
+def main():
     # Model and version
     MODEL = 'STM'
     print(MODEL, ': Testing on TIANCHI')
@@ -135,10 +135,11 @@ if __name__ == '__main__':
     if torch.cuda.is_available():
         print('using Cuda devices, num:', torch.cuda.device_count())
 
-    palette = Image.open(DATA_ROOT + '/Annotations/606332/00000.png').getpalette()
+    template_mask = glob.glob(os.path.join(DATA_ROOT, 'Annotations/*/00001.png'))[0]
+    palette = Image.open(template_mask).getpalette()
 
     Testset = TIANCHI(DATA_ROOT, imset='test.txt', single_object=True)
-    Testloader = data.DataLoader(Testset, batch_size=1, shuffle=False, num_workers=1, pin_memory=True)
+    Testloader = data.DataLoader(Testset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 
     model = nn.DataParallel(STM())
     if torch.cuda.is_available():
@@ -157,11 +158,7 @@ if __name__ == '__main__':
     date = datetime.datetime.strftime(datetime.datetime.now(), '%y%m%d%H%M')
     print('Start Testing:', code_name)
 
-    count = 0
     for seq, V in enumerate(Testloader):
-        count += 1
-        if count > 10:
-            break
         Fs, Ms, info = V
         seq_name = info['name'][0]
         ori_shape = info['ori_shape']
@@ -180,6 +177,105 @@ if __name__ == '__main__':
             img_E = img_E.resize(ori_shape[::-1])
             img_E.save(os.path.join(test_path, '{:05d}.png'.format(f)))
 
-    blend_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
 
+def mask_inference(data_dir, config, ckpt, out_dir):
+    # build the model from a config file and a checkpoint file
+    model = init_detector(config, ckpt, device='cuda:0')
+
+    # test a single image
+    imgs = glob.glob(os.path.join(data_dir, 'JPEGImages/*/00001.jpg'))
+    generate_imagesets(data_dir, imgs)
+    for img in imgs:
+        # img = '/workspace/solo/test/00001.jpg'
+        result, cost_time = inference_detector(model, img)
+        result = filter_result(result)
+        save_mask(img, result, 0.1, out_dir)
+
+
+def generate_imagesets(data_dir, imgs):
+    videos = [img.split('/')[-2] for img in imgs]
+    videos = np.unique(videos)
+    if not os.path.exists(os.path.join(data_dir, 'ImageSets')):
+        os.makedirs(os.path.join(data_dir, 'ImageSets'))
+    with open(os.path.join(data_dir, 'ImageSets/test.txt'), 'w') as f:
+        for v in videos:
+            f.write(v)
+            f.write('\n')
+
+
+def filter_result(result, index=0, max_num=8):
+    assert isinstance(result, list)
+    rr = []
+    for r in result:
+        mask, cate, score = r
+        idxs = cate == index
+        score = score[idxs]
+        mask = mask[idxs, :, :]
+        cate = cate[idxs]
+        if len(score) > max_num:
+            score = score[:max_num]
+            mask = mask[:max_num, :, :]
+            cate = cate[:max_num]
+        rr.append((mask, cate, score))
+    return rr
+
+
+def save_mask(img, result, score_thr, out_dir):
+    img_name = img.split('/')[-1]
+    video_name = img.split('/')[-2]
+    save_path = os.path.join(out_dir, video_name, img_name.replace('jpg', 'png'))
+    if not os.path.exists(os.path.dirname(save_path)):
+        os.makedirs(os.path.dirname(save_path))
+
+    cur_result = result[0]
+    seg_label = cur_result[0]
+    seg_label = seg_label.cpu().numpy().astype(np.uint8)
+    cate_label = cur_result[1]
+    cate_label = cate_label.cpu().numpy()
+    score = cur_result[2].cpu().numpy()
+
+    vis_inds = score >= score_thr
+    seg_label = seg_label[vis_inds]
+    num_mask = seg_label.shape[0]
+
+    if num_mask == 0:
+        return 0
+
+    np.random.seed(42)
+    color_masks = [
+        np.random.randint(0, 256, (1, 3), dtype=np.uint8)
+        for _ in range(num_mask)
+    ]
+    _, h, w = seg_label.shape
+    img_show = np.zeros((h, w, 3)).astype(np.uint8)
+    for idx in range(num_mask):
+        idx = -(idx + 1)
+        cur_mask = seg_label[idx, :, :]
+        cur_mask = (cur_mask > 0.5).astype(np.uint8)
+        if cur_mask.sum() == 0:
+            continue
+        color_mask = color_masks[idx]
+        cur_mask_bool = cur_mask.astype(np.bool)
+        img_show[cur_mask_bool] = color_mask
+
+    img_s = Image.fromarray(img_show).convert('P')
+    # mmcv.imwrite(save_path, out_dir)
+    img_s.save(save_path)
+
+
+if __name__ == '__main__':
+    GPU = '0'
+    DATA_ROOT = '/workspace/solo/test/0728'
+    MODEL_PATH = '/workspace/STM_test/user_data/model_data/model.pth'
+    SAVE_PATH = '/workspace/STM_test/prediction_result'
+    TMP_PATH = '/workspace/STM_test/user_data/tmp_data'
+    MERGE_PATH = '/workspace/STM_test/user_data/merge_data'
+    MASK_PATH = os.path.join(DATA_ROOT, 'Annotations')
+
+    CONFIG_FILE = r'../../cfg/aug_solov2_r101_imgaug.py'
+    CKPT_FILE = r'/workspace/solo/workdir/solov2_r101_ssim.pth'
+
+    mask_inference(DATA_ROOT, CONFIG_FILE, CKPT_FILE, MASK_PATH)
+    main()
+    blend_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
     zip_result(MERGE_PATH, SAVE_PATH)
