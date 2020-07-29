@@ -40,9 +40,10 @@ class TIANCHI(data.Dataset):
 
                 temp_mask = os.listdir(os.path.join(self.mask_dir, _video))
                 temp_mask.sort()
-                _mask = np.array(
-                    Image.open(os.path.join(self.mask_dir, _video, temp_mask[0])).convert("P").resize(self.target_size,
-                                                                                                      Image.NEAREST))
+                _mask = np.array(Image.open(os.path.join(self.mask_dir, _video, temp_mask[0])).convert("P"))
+                # _mask = np.array(
+                #     Image.open(os.path.join(self.mask_dir, _video, temp_mask[0])).convert("P").resize(self.target_size,
+                #                                                                                       Image.NEAREST))
 
                 if self.single_object:
                     temp_label = np.unique(_mask)
@@ -98,8 +99,8 @@ class TIANCHI(data.Dataset):
             video_true_name = video
             object_label = 1
 
-        N_frames = np.empty((self.num_frames[video],) + self.shape[video] + (3,), dtype=np.float32)
-        N_masks = np.empty((1,) + self.shape[video], dtype=np.uint8)
+        N_frames = np.empty((self.num_frames[video],) + self.target_size[::-1] + (3,), dtype=np.float32)
+        N_masks = np.empty((1,) + self.target_size[::-1], dtype=np.uint8)
         for f in range(self.num_frames[video]):
             img_file = os.path.join(self.image_dir, video_true_name, self.frame_list[video][f])
             N_frames[f] = np.array(

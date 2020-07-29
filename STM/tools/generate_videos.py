@@ -3,10 +3,10 @@ import cv2
 import datetime
 
 #  write videos
-root = '/data/sdv2/workspace/tianchi/dataset/tianchiyusai'
+root = '/workspace/solo/test/0728/'
 img_root = os.path.join(root, 'JPEGImages')
-ann_root = '/data/sdv2/project_hkf/STM_test/inference/test/2007171408/merge'
-save_dir = '/data/sdv2/project_hkf/STM_test/inference/test/2007171408/videos'
+ann_root = '/workspace/solo/user_data/merge_data'
+save_dir = '/workspace/solo/user_data/video_data'
 rq = datetime.datetime.strftime(datetime.datetime.now(), '%m%d%H%M')
 code = 'STM'
 save_dir = os.path.join(save_dir, code+'_'+rq)

@@ -27,7 +27,7 @@ from STM.dataset import TIANCHI
 torch.set_grad_enabled(False)  # Volatile
 
 
-def Run_video(Fs, Ms, num_frames, Mem_every=None, Mem_number=None):
+def Run_video(model, Fs, Ms, num_frames, Mem_every=None, Mem_number=None):
     # print('name:', name)
     # initialize storage tensors
     if Mem_every:
@@ -85,7 +85,7 @@ def blend_results(tmp_dir, merge_dir, data_dir):
 
     for i, name in enumerate(test):
         num_frames = len(glob.glob(os.path.join(img_root, name, '*.jpg')))
-        ann_path = os.path.join(ann_root, name, '00000.png')
+        ann_path = os.path.join(ann_root, name, '{:05d}.png'.format(START_FRAME))
         mask_f = Image.open(ann_path)
         w, h = mask_f.size
         palette = mask_f.getpalette()
@@ -97,15 +97,15 @@ def blend_results(tmp_dir, merge_dir, data_dir):
             os.makedirs(video_dir)
         if len(ins) == 1:
             for t in range(num_frames):
-                path = os.path.join(tmp_dir, name + '_1', '{:05d}.png'.format(t))
+                path = os.path.join(tmp_dir, name + '_1', '{:05d}.png'.format(t + START_FRAME))
                 mask = Image.open(path).convert('P').resize((w, h))
                 mask.putpalette(palette)
-                mask.save(os.path.join(video_dir, '{:05d}.png'.format(t)))
+                mask.save(os.path.join(video_dir, '{:05d}.png'.format(t + START_FRAME)))
         else:
             for t in range(num_frames):
                 mask = np.zeros((h, w), dtype=np.uint8)
                 for j in range(1, len(ins) + 1):
-                    path = os.path.join(tmp_dir, name + '_{}'.format(j), '{:05d}.png'.format(t))
+                    path = os.path.join(tmp_dir, name + '_{}'.format(j), '{:05d}.png'.format(t + START_FRAME))
                     temp = np.array(Image.open(path).convert('P').resize((w, h)), dtype=np.uint8)
                     temp[temp == 1] = j
                     mask += temp
@@ -113,11 +113,11 @@ def blend_results(tmp_dir, merge_dir, data_dir):
                 # print(len(ins), np.unique(mask))
                 mask = Image.fromarray(mask)
                 mask.putpalette(palette)
-                mask.save(os.path.join(video_dir, '{:05d}.png'.format(t)))
+                mask.save(os.path.join(video_dir, '{:05d}.png'.format(t + START_FRAME)))
 
 
 def zip_result(result_dir, save_path):
-    f = zipfile.ZipFile(os.path.join(save_path, 'submit.zip'), 'w', zipfile.ZIP_DEFLATED)
+    f = zipfile.ZipFile(os.path.join(save_path, 'result.zip'), 'w', zipfile.ZIP_DEFLATED)
     for dir_path, dir_name, file_names in os.walk(result_dir):
         file_path = dir_path.replace(result_dir, '')
         file_path = file_path and file_path + os.sep or ''
@@ -131,11 +131,10 @@ def main():
     MODEL = 'STM'
     print(MODEL, ': Testing on TIANCHI')
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = GPU
     if torch.cuda.is_available():
         print('using Cuda devices, num:', torch.cuda.device_count())
 
-    template_mask = glob.glob(os.path.join(DATA_ROOT, 'Annotations/*/00001.png'))[0]
+    template_mask = glob.glob(os.path.join(DATA_ROOT, 'Annotations/*/{:05d}.png'.format(START_FRAME)))[0]
     palette = Image.open(template_mask).getpalette()
 
     Testset = TIANCHI(DATA_ROOT, imset='test.txt', single_object=True)
@@ -165,7 +164,7 @@ def main():
         num_frames = info['num_frames'][0].item()
         print('[{}]: num_frames: {}'.format(seq_name, num_frames))
 
-        pred, Es = Run_video(Fs, Ms, num_frames, Mem_every=5, Mem_number=None)
+        pred, Es = Run_video(model, Fs, Ms, num_frames, Mem_every=5, Mem_number=None)
 
         # Save results for quantitative eval ######################
         test_path = os.path.join(TMP_PATH, seq_name)
@@ -175,7 +174,7 @@ def main():
             img_E = Image.fromarray(pred[0, 0, f].cpu().numpy().astype(np.uint8))
             img_E.putpalette(palette)
             img_E = img_E.resize(ori_shape[::-1])
-            img_E.save(os.path.join(test_path, '{:05d}.png'.format(f)))
+            img_E.save(os.path.join(test_path, '{:05d}.png'.format(f + START_FRAME)))
 
 
 def mask_inference(data_dir, config, ckpt, out_dir):
@@ -183,13 +182,13 @@ def mask_inference(data_dir, config, ckpt, out_dir):
     model = init_detector(config, ckpt, device='cuda:0')
 
     # test a single image
-    imgs = glob.glob(os.path.join(data_dir, 'JPEGImages/*/00001.jpg'))
+    imgs = glob.glob(os.path.join(data_dir, 'JPEGImages/*/{:05d}.jpg'.format(START_FRAME)))
     generate_imagesets(data_dir, imgs)
     for img in imgs:
         # img = '/workspace/solo/test/00001.jpg'
         result, cost_time = inference_detector(model, img)
-        result = filter_result(result)
-        save_mask(img, result, 0.1, out_dir)
+        result = filter_result(result, max_num=3)
+        save_mask(img, result, MASK_THR, out_dir)
 
 
 def generate_imagesets(data_dir, imgs):
@@ -203,7 +202,7 @@ def generate_imagesets(data_dir, imgs):
             f.write('\n')
 
 
-def filter_result(result, index=0, max_num=8):
+def filter_result(result, index=0, max_num=3):
     assert isinstance(result, list)
     rr = []
     for r in result:
@@ -242,14 +241,10 @@ def save_mask(img, result, score_thr, out_dir):
         return 0
 
     np.random.seed(42)
-    color_masks = [
-        np.random.randint(0, 256, (1, 3), dtype=np.uint8)
-        for _ in range(num_mask)
-    ]
+    color_masks = list(range(1, 256))
     _, h, w = seg_label.shape
-    img_show = np.zeros((h, w, 3)).astype(np.uint8)
+    img_show = np.zeros((h, w)).astype(np.uint8)
     for idx in range(num_mask):
-        idx = -(idx + 1)
         cur_mask = seg_label[idx, :, :]
         cur_mask = (cur_mask > 0.5).astype(np.uint8)
         if cur_mask.sum() == 0:
@@ -258,22 +253,43 @@ def save_mask(img, result, score_thr, out_dir):
         cur_mask_bool = cur_mask.astype(np.bool)
         img_show[cur_mask_bool] = color_mask
 
-    img_s = Image.fromarray(img_show).convert('P')
-    # mmcv.imwrite(save_path, out_dir)
+    img_s = Image.fromarray(img_show)
+    img_s.putpalette(PALETTE)
     img_s.save(save_path)
 
 
+def process_data_root(data_root, img_root):
+    for i in ('ImageSets', 'Annotations'):
+        if not os.path.exists(os.path.join(data_root, i)):
+            os.makedirs(os.path.join(data_root, i))
+    if os.path.exists(os.path.join(data_root, 'JPEGImages')):
+        os.unlink(os.path.join(data_root, 'JPEGImages'))
+    os.symlink(img_root, os.path.join(data_root, 'JPEGImages'))
+
+
 if __name__ == '__main__':
-    GPU = '0'
-    DATA_ROOT = '/workspace/solo/test/0728'
-    MODEL_PATH = '/workspace/STM_test/user_data/model_data/model.pth'
-    SAVE_PATH = '/workspace/STM_test/prediction_result'
-    TMP_PATH = '/workspace/STM_test/user_data/tmp_data'
-    MERGE_PATH = '/workspace/STM_test/user_data/merge_data'
+    DATA_ROOT = '/workspace/user_data/data'
+    IMG_ROOT = '/tcdata'
+    MODEL_PATH = '/workspace/user_data/model_data/model.pth'
+    SAVE_PATH = '/workspace'
+    TMP_PATH = '/workspace/user_data/tmp_data'
+    MERGE_PATH = '/workspace/user_data/merge_data'
     MASK_PATH = os.path.join(DATA_ROOT, 'Annotations')
 
-    CONFIG_FILE = r'../../cfg/aug_solov2_r101_imgaug.py'
-    CKPT_FILE = r'/workspace/solo/workdir/solov2_r101_ssim.pth'
+    if IMG_ROOT is not None or IMG_ROOT != '':
+        process_data_root(DATA_ROOT, IMG_ROOT)
+
+    CONFIG_FILE = r'/workspace/cfg/aug_solov2_r101_imgaug.py'
+    CKPT_FILE = r'/workspace/user_data/model_data/solov2_r101_ssim.pth'
+
+    TEMPLATE_MASK = r'/workspace/user_data/template_data/00001.png'
+    PALETTE = Image.open(TEMPLATE_MASK).getpalette()
+    imgs = glob.glob(os.path.join(DATA_ROOT, 'JPEGImages/*/*.jpg'))
+    imgs.sort()
+    START_FRAME = int(imgs[0].split('/')[-1].split('.')[0])
+    assert START_FRAME in (0, 1)
+
+    MASK_THR = 0.2
 
     mask_inference(DATA_ROOT, CONFIG_FILE, CKPT_FILE, MASK_PATH)
     main()
