@@ -19,12 +19,25 @@ from PIL import Image
 import cv2
 import numpy as np
 import zipfile
+from functools import wraps
 
 ### My libs
 from STM.models.model import STM
 from STM.dataset import TIANCHI
 
 torch.set_grad_enabled(False)  # Volatile
+
+
+def fn_timer(function):
+    @wraps(function)
+    def function_timer(*args, **kwargs):
+        t0 = time.time()
+        result = function(*args, **kwargs)
+        t1 = time.time()
+        print('[finished {func_name} in {time:.2f}s]'.format(func_name=function.__name__, time=t1 - t0))
+        return result
+
+    return function_timer
 
 
 def Run_video(model, Fs, Ms, num_frames, Mem_every=None, Mem_number=None):
@@ -68,6 +81,7 @@ def Run_video(model, Fs, Ms, num_frames, Mem_every=None, Mem_number=None):
 
 
 def blend_results(tmp_dir, merge_dir, data_dir):
+    print('Blending results...')
     img_root = os.path.join(data_dir, 'JPEGImages')
     ann_root = os.path.join(data_dir, 'Annotations')
     with open(os.path.join(data_dir, 'ImageSets/test.txt'), 'r') as f:
@@ -117,6 +131,7 @@ def blend_results(tmp_dir, merge_dir, data_dir):
 
 
 def zip_result(result_dir, save_path):
+    print('Generating zip file...')
     f = zipfile.ZipFile(os.path.join(save_path, 'result.zip'), 'w', zipfile.ZIP_DEFLATED)
     for dir_path, dir_name, file_names in os.walk(result_dir):
         file_path = dir_path.replace(result_dir, '')
@@ -126,18 +141,17 @@ def zip_result(result_dir, save_path):
     f.close()
 
 
-def main():
+@fn_timer
+def main(data_root, model_path, palette):
     # Model and version
     MODEL = 'STM'
-    print(MODEL, ': Testing on TIANCHI')
+    print(MODEL, ': Testing on TIANCHI...')
 
     if torch.cuda.is_available():
         print('using Cuda devices, num:', torch.cuda.device_count())
 
-    template_mask = glob.glob(os.path.join(DATA_ROOT, 'Annotations/*/{:05d}.png'.format(START_FRAME)))[0]
-    palette = Image.open(template_mask).getpalette()
-
-    Testset = TIANCHI(DATA_ROOT, imset='test.txt', single_object=True)
+    Testset = TIANCHI(data_root, imset='test.txt', single_object=True)
+    print('Total test videos: {}'.format(len(Testset)))
     Testloader = data.DataLoader(Testset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 
     model = nn.DataParallel(STM())
@@ -145,8 +159,8 @@ def main():
         model.cuda()
     model.eval()  # turn-off BN
 
-    print('Loading weights:', MODEL_PATH)
-    model_ = torch.load(MODEL_PATH)
+    print('Loading weights:', model_path)
+    model_ = torch.load(model_path)
     if 'state_dict' in model_.keys():
         state_dict = model_['state_dict']
     else:
@@ -154,7 +168,7 @@ def main():
     model.load_state_dict(state_dict)
 
     code_name = 'tianchi'
-    date = datetime.datetime.strftime(datetime.datetime.now(), '%y%m%d%H%M')
+    # date = datetime.datetime.strftime(datetime.datetime.now(), '%y%m%d%H%M')
     print('Start Testing:', code_name)
 
     for seq, V in enumerate(Testloader):
@@ -177,12 +191,15 @@ def main():
             img_E.save(os.path.join(test_path, '{:05d}.png'.format(f + START_FRAME)))
 
 
+@fn_timer
 def mask_inference(data_dir, config, ckpt, out_dir):
     # build the model from a config file and a checkpoint file
+    print('Generating first frame mask...')
     model = init_detector(config, ckpt, device='cuda:0')
 
     # test a single image
     imgs = glob.glob(os.path.join(data_dir, 'JPEGImages/*/{:05d}.jpg'.format(START_FRAME)))
+    print('Total images: {}'.format(imgs))
     generate_imagesets(data_dir, imgs)
     for img in imgs:
         # img = '/workspace/solo/test/00001.jpg'
@@ -192,10 +209,9 @@ def mask_inference(data_dir, config, ckpt, out_dir):
 
 
 def generate_imagesets(data_dir, imgs):
+    print('Generating image set file...')
     videos = [img.split('/')[-2] for img in imgs]
     videos = np.unique(videos)
-    if not os.path.exists(os.path.join(data_dir, 'ImageSets')):
-        os.makedirs(os.path.join(data_dir, 'ImageSets'))
     with open(os.path.join(data_dir, 'ImageSets/test.txt'), 'w') as f:
         for v in videos:
             f.write(v)
@@ -240,7 +256,6 @@ def save_mask(img, result, score_thr, out_dir):
     if num_mask == 0:
         return 0
 
-    np.random.seed(42)
     color_masks = list(range(1, 256))
     _, h, w = seg_label.shape
     img_show = np.zeros((h, w)).astype(np.uint8)
@@ -259,12 +274,19 @@ def save_mask(img, result, score_thr, out_dir):
 
 
 def process_data_root(data_root, img_root):
+    print('Processing data root...')
     for i in ('ImageSets', 'Annotations'):
         if not os.path.exists(os.path.join(data_root, i)):
             os.makedirs(os.path.join(data_root, i))
     if os.path.exists(os.path.join(data_root, 'JPEGImages')):
         os.unlink(os.path.join(data_root, 'JPEGImages'))
     os.symlink(img_root, os.path.join(data_root, 'JPEGImages'))
+
+
+def check_data_root(data_root):
+    assert os.path.exists(os.path.join(data_root, 'JPEGImages'))
+    assert os.path.exists(os.path.join(data_root, 'ImageSets'))
+    assert os.path.exists(os.path.join(data_root, 'Annotations'))
 
 
 if __name__ == '__main__':
@@ -278,6 +300,7 @@ if __name__ == '__main__':
 
     if IMG_ROOT is not None or IMG_ROOT != '':
         process_data_root(DATA_ROOT, IMG_ROOT)
+    check_data_root(DATA_ROOT)
 
     CONFIG_FILE = r'/workspace/cfg/aug_solov2_r101_imgaug.py'
     CKPT_FILE = r'/workspace/user_data/model_data/solov2_r101_ssim.pth'
@@ -285,13 +308,15 @@ if __name__ == '__main__':
     TEMPLATE_MASK = r'/workspace/user_data/template_data/00001.png'
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     imgs = glob.glob(os.path.join(DATA_ROOT, 'JPEGImages/*/*.jpg'))
+    print('Total test images: {}'.format(len(imgs)))
     imgs.sort()
     START_FRAME = int(imgs[0].split('/')[-1].split('.')[0])
     assert START_FRAME in (0, 1)
+    print('Frames start with {:05d}'.format(START_FRAME))
 
     MASK_THR = 0.2
 
     mask_inference(DATA_ROOT, CONFIG_FILE, CKPT_FILE, MASK_PATH)
-    main()
+    main(DATA_ROOT, MODEL_PATH, PALETTE)
     blend_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
     zip_result(MERGE_PATH, SAVE_PATH)
