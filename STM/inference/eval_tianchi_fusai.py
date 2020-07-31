@@ -84,7 +84,7 @@ def blend_results(tmp_dir, merge_dir, data_dir):
     print('Blending results...')
     img_root = os.path.join(data_dir, 'JPEGImages')
     ann_root = os.path.join(data_dir, 'Annotations')
-    with open(os.path.join(data_dir, 'ImageSets/test.txt'), 'r') as f:
+    with open(os.path.join(data_dir, 'ImageSets/test.txt')) as f:
         test = f.readlines()
     test = [img.strip() for img in test]
     print('test videos: ', len(test))
@@ -99,7 +99,7 @@ def blend_results(tmp_dir, merge_dir, data_dir):
 
     for i, name in enumerate(test):
         num_frames = len(glob.glob(os.path.join(img_root, name, '*.jpg')))
-        ann_path = os.path.join(ann_root, name, '{:05d}.png'.format(START_FRAME))
+        ann_path = os.path.join(ann_root, name, '{}.png'.format(VIDEO_FRAMES[name][0]))
         mask_f = Image.open(ann_path)
         w, h = mask_f.size
         palette = mask_f.getpalette()
@@ -111,15 +111,16 @@ def blend_results(tmp_dir, merge_dir, data_dir):
             os.makedirs(video_dir)
         if len(ins) == 1:
             for t in range(num_frames):
-                path = os.path.join(tmp_dir, name + '_1', '{:05d}.png'.format(t + START_FRAME))
+                path = os.path.join(tmp_dir, name + '_1', '{}.png'.format(VIDEO_FRAMES[name][t]))
                 mask = Image.open(path).convert('P').resize((w, h))
                 mask.putpalette(palette)
-                mask.save(os.path.join(video_dir, '{:05d}.png'.format(t + START_FRAME)))
+                mask.save(os.path.join(video_dir, '{}.png'.format(VIDEO_FRAMES[name][t])))
         else:
             for t in range(num_frames):
                 mask = np.zeros((h, w), dtype=np.uint8)
                 for j in range(1, len(ins) + 1):
-                    path = os.path.join(tmp_dir, name + '_{}'.format(j), '{:05d}.png'.format(t + START_FRAME))
+                    path = os.path.join(tmp_dir, name + '_{}'.format(j),
+                                        '{}.png'.format(VIDEO_FRAMES[name][t]))
                     temp = np.array(Image.open(path).convert('P').resize((w, h)), dtype=np.uint8)
                     temp[temp == 1] = j
                     mask += temp
@@ -127,7 +128,7 @@ def blend_results(tmp_dir, merge_dir, data_dir):
                 # print(len(ins), np.unique(mask))
                 mask = Image.fromarray(mask)
                 mask.putpalette(palette)
-                mask.save(os.path.join(video_dir, '{:05d}.png'.format(t + START_FRAME)))
+                mask.save(os.path.join(video_dir, '{}.png'.format(VIDEO_FRAMES[name][t])))
 
 
 def zip_result(result_dir, save_path):
@@ -176,6 +177,9 @@ def main(data_root, model_path, palette):
         seq_name = info['name'][0]
         ori_shape = info['ori_shape']
         num_frames = info['num_frames'][0].item()
+        if '_' in seq_name:
+            video_name = seq_name.split('_')[0]
+
         print('[{}]: num_frames: {}'.format(seq_name, num_frames))
 
         pred, Es = Run_video(model, Fs, Ms, num_frames, Mem_every=5, Mem_number=None)
@@ -188,7 +192,7 @@ def main(data_root, model_path, palette):
             img_E = Image.fromarray(pred[0, 0, f].cpu().numpy().astype(np.uint8))
             img_E.putpalette(palette)
             img_E = img_E.resize(ori_shape[::-1])
-            img_E.save(os.path.join(test_path, '{:05d}.png'.format(f + START_FRAME)))
+            img_E.save(os.path.join(test_path, '{}.png'.format(VIDEO_FRAMES[video_name][f])))
 
 
 @fn_timer
@@ -198,7 +202,9 @@ def mask_inference(data_dir, config, ckpt, out_dir):
     model = init_detector(config, ckpt, device='cuda:0')
 
     # test a single image
-    imgs = glob.glob(os.path.join(data_dir, 'JPEGImages/*/{:05d}.jpg'.format(START_FRAME)))
+    imgs = []
+    for k, v in VIDEO_FRAMES.items():
+        imgs.append(os.path.join(data_dir, 'JPEGImages/{}/{}.jpg'.format(k, v[0])))
     print('Total images: {}'.format(imgs))
     generate_imagesets(data_dir, imgs)
     for img in imgs:
@@ -289,6 +295,25 @@ def check_data_root(data_root):
     assert os.path.exists(os.path.join(data_root, 'Annotations'))
 
 
+def analyse_images(data_root):
+    imgs = glob.glob(os.path.join(data_root, 'JPEGImages/*/*.jpg'))
+    print('Total test images: {}'.format(len(imgs)))
+    videos = []
+    for file in os.listdir(os.path.join(data_root, 'JPEGImages')):
+        if os.path.isdir(os.path.join(data_root, 'JPEGImages', file)):
+            videos.append(file)
+    print('Total test videos: {}'.format(len(videos)))
+
+    v_frames = {}
+    for video in videos:
+        frames = os.listdir(os.path.join(data_root, 'JPEGImages', video))
+        frames = [frame.split('.')[0] for frame in frames]
+        frames.sort(key=int)
+        v_frames.setdefault(video, frames)
+
+    return v_frames
+
+
 if __name__ == '__main__':
     DATA_ROOT = '/workspace/user_data/data'
     IMG_ROOT = '/tcdata'
@@ -307,12 +332,7 @@ if __name__ == '__main__':
 
     TEMPLATE_MASK = r'/workspace/user_data/template_data/00001.png'
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
-    imgs = glob.glob(os.path.join(DATA_ROOT, 'JPEGImages/*/*.jpg'))
-    print('Total test images: {}'.format(len(imgs)))
-    imgs.sort()
-    START_FRAME = int(imgs[0].split('/')[-1].split('.')[0])
-    assert START_FRAME in (0, 1)
-    print('Frames start with {:05d}'.format(START_FRAME))
+    VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
     MASK_THR = 0.2
 
