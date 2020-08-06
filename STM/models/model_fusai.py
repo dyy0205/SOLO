@@ -219,9 +219,10 @@ class Memory(nn.Module):
         for i in range(b):
             m_ = mask[i].squeeze(0)
             m_ = m_.cpu().numpy()
-            m_ = m_ * 255
+            m_ *= 255
             m_ = cv2.GaussianBlur(m_, (11, 11), 0, 0)
             m_ = torch.from_numpy(m_).unsqueeze(0)
+            m_ /= 255
             p_mask[i] = m_
 
         return p_mask

@@ -70,7 +70,7 @@ class TIANCHI(data.Dataset):
     '''
 
     def __init__(self, root, phase, imset='2016/val.txt', separate_instance=False, only_single=False,
-                 target_size=(864, 480), clip_size=None, only_multiple=False, mode='sample'):
+                 target_size=(864, 480), clip_size=None, only_multiple=False, mode='sample', interval=1):
         assert phase in ['train']
         self.phase = phase
         self.root = root
@@ -82,6 +82,7 @@ class TIANCHI(data.Dataset):
         self.OS = only_single  # 只统计只有一个instance的视频
         self.OM = only_multiple
         self.mode = mode
+        self.interval = interval
         assert not (self.OM and self.OS)
         assert mode in ('sample', 'sequence')
 
@@ -190,8 +191,8 @@ class TIANCHI(data.Dataset):
             for i in range(final_clip_size):
                 frames_num.append(random.randint(p[i], p[i+1]))
         elif self.phase == 'train' and final_clip_size < self.num_frames[video] and self.mode == 'sequence':
-            start_frame = random.randint(0, self.num_frames[video] - final_clip_size - 1)
-            frames_num = [start_frame + i for i in range(final_clip_size)]
+            start_frame = random.randint(0, self.num_frames[video] - final_clip_size * self.interval - 1)
+            frames_num = [start_frame + i * self.interval for i in range(final_clip_size)]
         else:
             frames_num = list(range(final_clip_size))
 

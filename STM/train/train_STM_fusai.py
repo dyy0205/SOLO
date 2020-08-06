@@ -173,6 +173,8 @@ def validate(args, val_loader, model):
             progressbar.set_description(
                 'val_complete:{}, name:{}, loss:{}, miou:{}'.format(seq / len(val_loader), name, loss_video,
                                                                     video_mIou))
+            # print('val_complete:{}, name:{}, loss:{}, miou:{}'.format(seq / len(val_loader), name, loss_video,
+            #                                                         video_mIou))
 
             if args.vis_val and args.mode == 'val':
                 videos_name.append(name[0])
