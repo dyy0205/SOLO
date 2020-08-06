@@ -69,8 +69,8 @@ class TIANCHI(data.Dataset):
     Dataset for YOUTUBE to train
     '''
 
-    def __init__(self, root, phase, imset='2016/val.txt', resolution='480p', separate_instance=False, only_single=False,
-                 target_size=(864, 480), clip_size=None, only_multiple=False):
+    def __init__(self, root, phase, imset='2016/val.txt', separate_instance=False, only_single=False,
+                 target_size=(864, 480), clip_size=None, only_multiple=False, mode='sample'):
         assert phase in ['train']
         self.phase = phase
         self.root = root
@@ -81,14 +81,12 @@ class TIANCHI(data.Dataset):
             assert not only_single
         self.OS = only_single  # 只统计只有一个instance的视频
         self.OM = only_multiple
+        self.mode = mode
         assert not (self.OM and self.OS)
+        assert mode in ('sample', 'sequence')
 
-        if imset[0] != '2':
-            self.mask_dir = os.path.join(root, 'Annotations')
-            self.image_dir = os.path.join(root, 'JPEGImages')
-        else:
-            self.mask_dir = os.path.join(root, 'Annotations', resolution)
-            self.image_dir = os.path.join(root, 'JPEGImages', resolution)
+        self.mask_dir = os.path.join(root, 'Annotations')
+        self.image_dir = os.path.join(root, 'JPEGImages')
         _imset_dir = os.path.join(root, 'ImageSets')
         # print(_imset_dir)
         _imset_f = os.path.join(_imset_dir, imset)
@@ -138,21 +136,7 @@ class TIANCHI(data.Dataset):
                                 glob.glob(os.path.join(self.image_dir, _video, '*.png')))
                             self.mask_list[_video + '_{}'.format(i)] = temp_mask
                             self.frame_list[_video + '_{}'.format(i)] = temp_img
-                            # self.num_objects[_video + '_{}'.format(i)] = 1
                             self.shape[_video + '_{}'.format(i)] = np.shape(_mask)
-                            #
-                            # not_empty_frames = []
-                            # empty_frames = []
-                            # for f in range(num_frames):
-                            #     mask_file = os.path.join(self.mask_dir, _video, self.mask_list[_video + '_{}'.format(i)][i])
-                            #     temp = np.array(Image.open(mask_file).convert('P'), dtype=np.uint8)
-                            #     if i in temp:
-                            #         not_empty_frames.append(i)
-                            #     else:
-                            #         empty_frames.append(i)
-                            #
-                            # self.not_empty_frames[_video][i]['not_empty'] = not_empty_frames
-                            # self.not_empty_frames[_video][i]['empty'] = empty_frames
 
                 else:
                     if self.OS and np.max(_mask) > 1.1:
@@ -181,8 +165,10 @@ class TIANCHI(data.Dataset):
 
         # print('phase',self.phase,self.clip_size)
         if isinstance(self.clip_size, int) and self.phase == 'train':
-            final_clip_size = self.clip_size
-            # final_clip_size = min(self.clip_size,self.num_frames[video])
+            # final_clip_size = self.clip_size
+            final_clip_size = min(self.clip_size,self.num_frames[video])
+        elif self.clip_size == 'all' and self.phase == 'train':
+            final_clip_size = self.num_frames[video]
         elif self.phase == 'val' and (self.clip_size is None):
             final_clip_size = self.num_frames[video]
         else:
@@ -196,30 +182,19 @@ class TIANCHI(data.Dataset):
         N_frames = np.empty((final_clip_size,) + self.shape[video] + (3,), dtype=np.float32)
         N_masks = np.empty((final_clip_size,) + self.shape[video], dtype=np.uint8)
 
-        # not_empty_frames = self.not_empty_frames[video_true_name][object_label]['not_empty']
-        # empty_frames = self.not_empty_frames[video_true_name][object_label]['empty']
-        #
-        # if len(not_empty_frames) >= final_clip_size:
-        #     frames_num = random.sample(not_empty_frames, final_clip_size)
-        # else:
-        #     frames_num = not_empty_frames + random.sample(empty_frames, final_clip_size - len(not_empty_frames))
-        # frames_num.sort()
-        if self.phase == 'train':
-            # p1 = int(1 / 3 * frames)
-            # p2 = int(2 / 3 * frames)
+        if self.phase == 'train' and final_clip_size < self.num_frames[video] and self.mode == 'sample':
             p = [int(x / final_clip_size * frames) for x in range(1, final_clip_size)]
             p.insert(0, 0)
             p.append(frames - 1)
             frames_num = []
             for i in range(final_clip_size):
                 frames_num.append(random.randint(p[i], p[i+1]))
-            # frame_1 = random.randint(0, p1 - 1)
-            # # frame_1 = 0
-            # frame_2 = random.randint(p1, p2 - 1)
-            # frame_3 = random.randint(p2, frames - 1)
-            # info['interval'] = [frame_2 - frame_1, frame_3 - frame_2]
+        elif self.phase == 'train' and final_clip_size < self.num_frames[video] and self.mode == 'sequence':
+            start_frame = random.randint(0, self.num_frames[video] - final_clip_size - 1)
+            frames_num = [start_frame + i for i in range(final_clip_size)]
+        else:
+            frames_num = list(range(final_clip_size))
 
-            # frames_num = [frame_1, frame_2, frame_3]
 
         for f in range(final_clip_size):
             img_file = os.path.join(self.image_dir, video_true_name, self.frame_list[video][frames_num[f]])
@@ -229,11 +204,6 @@ class TIANCHI(data.Dataset):
             mask_file = os.path.join(self.mask_dir, video_true_name, self.mask_list[video][frames_num[f]])
             temp = np.array(Image.open(mask_file).convert('P').resize(self.target_size, Image.BILINEAR), dtype=np.uint8)
 
-            # if f == 0 and not np.any(temp):
-            #     print(video_true_name, object_label)
-
-            # if np.unique(temp).any() not in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]:
-            #     print(np.unique(temp))
             temp_mask = np.zeros(temp.shape)
             if self.SI:
                 temp_mask[temp == object_label] = 1
