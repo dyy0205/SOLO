@@ -118,7 +118,7 @@ class TIANCHI(data.Dataset):
                     continue
                 if len(temp_img) != len(temp_mask):
                     continue
-                if len(temp_img) < clip_size:
+                if len(temp_img) < clip_size * interval - 1:
                     continue
 
                 self.not_empty_frames.setdefault(_video, {})

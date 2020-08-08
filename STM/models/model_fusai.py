@@ -179,7 +179,7 @@ class Memory(nn.Module):
         # print('#####', B, C_key, T, H, W)
         _, C_value, _, _, _ = values_m.size()
 
-        p_mask = self.process_mask(mask)  # B, 1, H, W
+        p_mask = self.process_mask(mask, (H, W))  # B, 1, H, W
         key_q_c = torch.cat([key_q, p_mask], dim=1)  # B, Ck+1, H, W
         w = self.conv_w(key_q_c)
         w = self.sigmoid(w)
@@ -211,8 +211,8 @@ class Memory(nn.Module):
         return final_value
 
     @staticmethod
-    def process_mask(mask):
-        pool = nn.AdaptiveAvgPool2d((30, 54))
+    def process_mask(mask, shape):
+        pool = nn.AdaptiveAvgPool2d(shape)
         mask = pool(mask)
         b, c, h, w = mask.shape
         p_mask = torch.zeros_like(mask)

@@ -10,7 +10,6 @@ import numpy as np
 import tqdm
 import os
 import argparse
-from tensorboardX import SummaryWriter
 import matplotlib.pyplot as plt
 import csv
 import warnings
@@ -24,14 +23,14 @@ import time
 import datetime
 
 ### My libs
-from dataloader.dataset_rgmp_v1 import DAVIS
-from dataloader.train_stm_stage1 import YOUTUBE
-from dataloader.train_gcm_stage2 import YOUTUBE2
-from dataloader.train_stm_stage3 import DAVIS3
-from dataloader.train_tianchi import TIANCHI
-from models.model import STM
-from models.loss.smooth_cross_entropy_loss import SmoothCrossEntropyLoss
-from models.loss.dice_loss import DiceLoss
+from STM.dataloader.dataset_rgmp_v1 import DAVIS
+from STM.dataloader.train_stm_stage1 import YOUTUBE
+from STM.dataloader.train_gcm_stage2 import YOUTUBE2
+from STM.dataloader.train_stm_stage3 import DAVIS3
+from STM.dataloader.tianchi_dataset import TIANCHI
+from STM.models.model import STM
+from STM.models.loss.smooth_cross_entropy_loss import SmoothCrossEntropyLoss
+from STM.models.loss.dice_loss import DiceLoss
 
 
 def parse_args():
@@ -218,7 +217,7 @@ def validate(args, val_loader, model):
     return loss_all_videos, miou_all_videos
 
 
-def train(args, train_loader, model, writer, epoch_start=0, lr=1e-5):
+def train(args, train_loader, model, epoch_start=0, lr=1e-5):
     print('training...')
     MODEL = 'STM'
     print(MODEL, 'Training on ', args.train_data)
@@ -232,39 +231,11 @@ def train(args, train_loader, model, writer, epoch_start=0, lr=1e-5):
     epochs = args.epoch
 
     for epoch in range(epoch_start, epochs):
-        # interval = ((epoch + 1) / args.epoch) * 25
-        # interval = max(interval, 1)
-        # train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train.txt', resolution='480p',
-        #                         separate_instance=True, only_single=False, target_size=(864, 480),
-        #                         clip_size=clip_size, interval=interval)
-        # train_loader = data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=8,
-        #                                pin_memory=True)
 
         if args.train_with_val and (epoch + 1) % args.validate_interval == 0:
             # validate
             loss_val, miou_val = validate(args, val_loader, model)
-            writer.add_scalar('val/Loss', loss_val.detach().cpu().numpy(), epoch)
-            writer.add_scalar('val/miou', miou_val, epoch)
             log.logger.info('val loss:{}, val miou:{}'.format(loss_val, miou_val))
-            # if args.year==2016:
-            #     loss_val_2016, miou_val_2016 = validate(args, val_loader_2016, model)
-            #     # write loss and mIOU into tensorboard
-            #     writer.add_scalar('val_2016/Loss', loss_val_2016.detach().cpu().numpy(), epoch)
-            #     writer.add_scalar('val_2016/miou', miou_val_2016, epoch)
-            # elif args.year==2017:
-            #     loss_val_2017, miou_val_2017 = validate(args, val_loader_2017, model)
-            #     writer.add_scalar('val_2017/Loss', loss_val_2017.detach().cpu().numpy(), epoch)
-            #     writer.add_scalar('val_2017/miou', miou_val_2017, epoch)
-            # else:
-            #     args.year = 2016
-            #     loss_val_2016, miou_val_2016 = validate(args, val_loader_2016, model)
-            #     writer.add_scalar('val_2016/Loss', loss_val_2016.detach().cpu().numpy(), epoch)
-            #     writer.add_scalar('val_2016/miou', miou_val_2016, epoch)
-            #     args.year = 2017
-            #     loss_val_2017, miou_val_2017 = validate(args, val_loader_2017, model)
-            #     writer.add_scalar('val_2017/Loss', loss_val_2017.detach().cpu().numpy(), epoch)
-            #     writer.add_scalar('val_2017/miou', miou_val_2017, epoch)
-            #     args.year = 0
 
         model.train()
         # turn-off BN
@@ -302,8 +273,6 @@ def train(args, train_loader, model, writer, epoch_start=0, lr=1e-5):
 
             # write into tensorboardX
             y1 = loss_video.detach().cpu().numpy()
-            writer.add_scalar('train/loss', y1, epoch * len(train_loader) + seq)
-            writer.add_scalar('train/miou', video_mIou, epoch * len(train_loader) + seq)
 
         # save checkpoints
         if (epoch + 1) % args.save_interval == 0:
@@ -321,7 +290,6 @@ def train(args, train_loader, model, writer, epoch_start=0, lr=1e-5):
 
 if __name__ == '__main__':
     args = parse_args()
-    writer = SummaryWriter(args.work_dir + '/runs')
 
     if not os.path.exists(args.work_dir):
         os.makedirs(args.work_dir)
@@ -368,30 +336,9 @@ if __name__ == '__main__':
     DAVIS_ROOT = args.davis
     palette = Image.open(DAVIS_ROOT + '/Annotations/606332/00000.png').getpalette()
 
-    val_dataset = DAVIS(DAVIS_ROOT, phase='val', imset='total_val.txt', resolution='480p',
+    val_dataset = DAVIS(DAVIS_ROOT, phase='val', imset='tianchi_val.txt', resolution='480p',
                         separate_instance=False, only_single=False, target_size=(864, 480))
-    val_loader = data.DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=2, pin_memory=True)
-
-    # if args.year == 2016:
-    #     val_dataset_2016 = DAVIS(DAVIS_ROOT, phase='val', imset='2016/val.txt', resolution='480p',
-    #                              separate_instance=False, only_single=False, target_size=(864, 480))
-    #     val_loader_2016 = data.DataLoader(val_dataset_2016, batch_size=1, shuffle=False, num_workers=2, pin_memory=True)
-    # elif args.year == 2017:
-    #     val_dataset_2017 = DAVIS(DAVIS_ROOT, phase='val', imset='2017/val.txt', resolution='480p',
-    #                              separate_instance=False, only_single=False, target_size=(864, 480))
-    #     val_loader_2017 = data.DataLoader(val_dataset_2017, batch_size=1, shuffle=False, num_workers=2, pin_memory=True)
-    # elif args.year == 1:
-    #     val_dataset_lyuan = DAVIS(DAVIS_ROOT, phase='val', imset='2017/lyuan.txt', resolution='480p',
-    #                               separate_instance=True, only_single=False, target_size=(864, 480))
-    #     val_loader_lyuan = data.DataLoader(val_dataset_lyuan, batch_size=1, shuffle=False, num_workers=2,
-    #                                        pin_memory=True)
-    # else:
-    #     val_dataset_2016 = DAVIS(DAVIS_ROOT, phase='val', imset='2016/val.txt', resolution='480p',
-    #                              separate_instance=False, only_single=False, target_size=(864, 480))
-    #     val_loader_2016 = data.DataLoader(val_dataset_2016, batch_size=1, shuffle=False, num_workers=2, pin_memory=True)
-    #     val_dataset_2017 = DAVIS(DAVIS_ROOT, phase='val', imset='2017/val.txt', resolution='480p',
-    #                              separate_instance=False, only_single=False, target_size=(864, 480))
-    #     val_loader_2017 = data.DataLoader(val_dataset_2017, batch_size=1, shuffle=False, num_workers=2, pin_memory=True)
+    val_loader = data.DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 
     # build model
     # device_list = [int(i) for i in GPU.split(',')]
@@ -408,30 +355,6 @@ if __name__ == '__main__':
     if args.mode == "val":
         loss_val, miou_val = validate(args, val_loader, model)
         log.logger.info('val loss:{}, val miou:{}'.format(loss_val, miou_val))
-    #     # run val
-    #     with torch.no_grad():
-    #         if args.year == 2016:
-    #             loss_val_2016, miou_val_2016 = validate(args, val_loader_2016, model)
-    #             print('loss_val_2016:', loss_val_2016)
-    #             print('miou_val_2016:', miou_val_2016)
-    #         elif args.year == 2017:
-    #             loss_val_2017, miou_val_2017 = validate(args, val_loader_2017, model)
-    #             print('loss_val_2017:', loss_val_2017)
-    #             print('miou_val_2017:', miou_val_2017)
-    #         elif args.year == 1:
-    #             loss_val_lyuan, miou_val_lyuan = validate(args, val_loader_lyuan, model)
-    #             print('loss_val_2017:', loss_val_lyuan)
-    #             print('miou_val_2017:', miou_val_lyuan)
-    #         else:
-    #             args.year = 2016
-    #             loss_val_2016, miou_val_2016 = validate(args, val_loader_2016, model)
-    #             args.year = 2017
-    #             loss_val_2017, miou_val_2017 = validate(args, val_loader_2017, model)
-    #             print('loss_val_2016:', loss_val_2016)
-    #             print('miou_val_2016:', miou_val_2016)
-    #             print('loss_val_2017:', loss_val_2017)
-    #             print('miou_val_2017:', miou_val_2017)
-    #             args.year = 0
 
     elif args.mode == "train":
         # set training para
@@ -463,4 +386,4 @@ if __name__ == '__main__':
                 lr = ckpt['lr']
 
         # run train
-        train(args, train_loader, model, writer, epoch_start, lr)
+        train(args, train_loader, model, epoch_start, lr)

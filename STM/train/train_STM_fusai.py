@@ -45,6 +45,7 @@ def parse_args():
     parser.add_argument('--train_data', type=str, default='davis')
     parser.add_argument('--lr', type=float, default=1e-5)
     parser.add_argument('--clip_size', type=int, default=3)
+    parser.add_argument('--interval', type=int, default=1)
     parser.add_argument('--batch_size', type=int, default=3)
     parser.add_argument('--epoch', type=int, default=100)
     parser.add_argument('--save_interval', type=int, default=1)
@@ -111,16 +112,14 @@ def Run_video(args, Fs, Ms, num_frames, name, Mem_every=None, Mem_number=None, o
         Ms_cuda = Ms[:, 0, t].cuda()
         # loss_video += (_loss(logits, Ms_cuda) + 0.5 * _loss(p_m2, Ms_cuda) + 0.25 * _loss(p_m3, Ms_cuda))
         if optimizer is None:
-            # loss_video += (_loss(logits, Ms_cuda) + 0.5 * _loss(p_m2, Ms_cuda) + 0.25 * _loss(p_m3, Ms_cuda))
-            loss_video += _loss(logits, Ms_cuda)
+            loss_video += _loss(logits, Ms_cuda) + 0.5 * _loss(p_m2, Ms_cuda) + 0.25 * _loss(p_m3, Ms_cuda)
+            # loss_video += _loss(logits, Ms_cuda)
             loss_total = loss_video
         else:
-            # loss_video = _loss(logits, Ms_cuda) + 0.5 * _loss(p_m2, Ms_cuda) + 0.25 * _loss(p_m3, Ms_cuda)
-            loss_video = _loss(logits, Ms_cuda)
+            loss_video = _loss(logits, Ms_cuda) + 0.5 * _loss(p_m2, Ms_cuda) + 0.25 * _loss(p_m3, Ms_cuda)
+            # loss_video = _loss(logits, Ms_cuda)
             loss_total += loss_video.detach()
-            # optimizer.zero_grad()
             loss_video.backward()
-            # optimizer.step()
 
         # update key and value
         if t - 1 in to_memorize:
@@ -173,8 +172,6 @@ def validate(args, val_loader, model):
             progressbar.set_description(
                 'val_complete:{}, name:{}, loss:{}, miou:{}'.format(seq / len(val_loader), name, loss_video,
                                                                     video_mIou))
-            # print('val_complete:{}, name:{}, loss:{}, miou:{}'.format(seq / len(val_loader), name, loss_video,
-            #                                                         video_mIou))
 
             if args.vis_val and args.mode == 'val':
                 videos_name.append(name[0])
@@ -213,7 +210,7 @@ def validate(args, val_loader, model):
     return loss_all_videos, miou_all_videos
 
 
-def train(args, train_loader, model, epoch_start=0, lr=1e-5):
+def train(args, optimizer, train_loader, model, epoch_start=0, lr=1e-5):
     print('training...')
     MODEL = 'STM'
     print(MODEL, 'Training on ', args.train_data)
@@ -221,7 +218,6 @@ def train(args, train_loader, model, epoch_start=0, lr=1e-5):
     code_name = '{}_DAVIS_{}'.format(MODEL, args.train_data)
     print('Start Training:', code_name)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr, betas=(0.9, 0.99))
     # optimizer = torch.optim.SGD(model.parameters(), lr, momentum=0.9, weight_decay=1e-4)
 
     epochs = args.epoch
@@ -271,11 +267,11 @@ def train(args, train_loader, model, epoch_start=0, lr=1e-5):
             ckpt_dir = os.path.join(args.work_dir, "ckpt", DATETIME)
             if not os.path.exists(ckpt_dir):
                 os.makedirs(ckpt_dir)
-            state_dict = model.state_dict()
             torch.save({
                 'epoch': epoch,
-                'state_dict': state_dict,
+                'state_dict': model.state_dict(),
                 'lr': args.lr,
+                'optimizer': optimizer.state_dict()
             }, os.path.join(ckpt_dir, 'ckpt_{}e.pth'.format(epoch)))
 
         if args.train_with_val and (epoch + 1) % args.validate_interval == 0:
@@ -348,52 +344,33 @@ if __name__ == '__main__':
     if args.mode == "val":
         loss_val, miou_val = validate(args, val_loader, model)
         log.logger.info('val loss:{}, val miou:{}'.format(loss_val, miou_val))
-    #     # run val
-    #     with torch.no_grad():
-    #         if args.year == 2016:
-    #             loss_val_2016, miou_val_2016 = validate(args, val_loader_2016, model)
-    #             print('loss_val_2016:', loss_val_2016)
-    #             print('miou_val_2016:', miou_val_2016)
-    #         elif args.year == 2017:
-    #             loss_val_2017, miou_val_2017 = validate(args, val_loader_2017, model)
-    #             print('loss_val_2017:', loss_val_2017)
-    #             print('miou_val_2017:', miou_val_2017)
-    #         elif args.year == 1:
-    #             loss_val_lyuan, miou_val_lyuan = validate(args, val_loader_lyuan, model)
-    #             print('loss_val_2017:', loss_val_lyuan)
-    #             print('miou_val_2017:', miou_val_lyuan)
-    #         else:
-    #             args.year = 2016
-    #             loss_val_2016, miou_val_2016 = validate(args, val_loader_2016, model)
-    #             args.year = 2017
-    #             loss_val_2017, miou_val_2017 = validate(args, val_loader_2017, model)
-    #             print('loss_val_2016:', loss_val_2016)
-    #             print('miou_val_2016:', miou_val_2016)
-    #             print('loss_val_2017:', loss_val_2017)
-    #             print('miou_val_2017:', miou_val_2017)
-    #             args.year = 0
 
     elif args.mode == "train":
         # set training para
         clip_size = args.clip_size
         BATCH_SIZE = args.batch_size
+        interval = args.interval
 
         # prepare training data
         train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train.txt', separate_instance=True,
-                                only_single=False, target_size=(864, 480), clip_size=3, mode='sequence')
+                                only_single=False, target_size=(864, 480), clip_size=clip_size, mode='sequence',
+                                interval=interval)
         train_loader = data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0,
                                        pin_memory=True)
 
         epoch_start = 0
         lr = args.lr
+        optimizer = torch.optim.Adam(model.parameters(), lr, betas=(0.9, 0.99))
         # resume_from
         if args.resume_from:
             print('resume from:', args.resume_from)
             ckpt = torch.load(args.resume_from)
             model.load_state_dict(ckpt['state_dict'], strict=True)
-            epoch_start = ckpt['epoch']
-            if 'lr' in ckpt.keys():
-                lr = ckpt['lr']
+            epoch_start = ckpt['epoch'] + 1
+            # if 'lr' in ckpt.keys():
+            #     lr = ckpt['lr']
+            if 'optimizer' in ckpt.keys():
+                optimizer.load_state_dict(ckpt['optimizer'])
 
         # run train
-        train(args, train_loader, model, epoch_start, lr)
+        train(args, optimizer, train_loader, model, epoch_start, lr)
