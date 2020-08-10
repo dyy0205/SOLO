@@ -137,7 +137,7 @@ total_epochs = 24
 device_ids = range(8)
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
-work_dir = './work_dirs/aug_solov2_r101_imgaug'
+work_dir = './work_dirs/add_solov2_r101_imgaug'
 load_from = './work_dirs/aug_solov2_r101_tuned_ssim/epoch_12.pth'
 # load_from = '../pretrained_models/solov2_r101_3x.pth'
 resume_from = './work_dirs/aug_solov2_r101_imgaug/epoch_1.pth'

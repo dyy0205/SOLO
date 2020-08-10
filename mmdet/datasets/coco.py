@@ -22,7 +22,7 @@ class CocoDataset(CustomDataset):
     #            'mouse', 'remote', 'keyboard', 'cell_phone', 'microwave',
     #            'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
     #            'vase', 'scissors', 'teddy_bear', 'hair_drier', 'toothbrush')
-    CLASSES = ('person', 'cat', 'dog', 'cartoon')
+    CLASSES = ('person', 'cat', 'dog', 'cartoon', 'horse', 'sheep', 'cow', 'car', 'airplane')
 
     def load_annotations(self, ann_file):
         self.coco = COCO(ann_file)
