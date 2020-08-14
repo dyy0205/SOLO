@@ -244,35 +244,56 @@ def save_mask(img, result, score_thr, out_dir):
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path))
 
-    cur_result = result[0]
-    seg_label = cur_result[0]
-    seg_label = seg_label.cpu().numpy().astype(np.uint8)
-    cate_label = cur_result[1]
-    cate_label = cate_label.cpu().numpy()
-    score = cur_result[2].cpu().numpy()
+    if result != []:
+        cur_result = result[0]
+        seg_label = cur_result[0]
+        seg_label = seg_label.cpu().numpy().astype(np.uint8)
+        cate_label = cur_result[1]
+        cate_label = cate_label.cpu().numpy()
+        score = cur_result[2].cpu().numpy()
 
-    vis_inds = score >= score_thr
-    seg_label = seg_label[vis_inds]
-    num_mask = seg_label.shape[0]
+        vis_inds = score >= score_thr
+        seg_label = seg_label[vis_inds]
+        num_mask = seg_label.shape[0]
 
-    if num_mask == 0:
-        return 0
+        if num_mask == 0:
+            print(img)
+            img_ = cv2.imread(img)
+            h, w, c = img_.shape
+            img_show = np.zeros((h, w)).astype(np.uint8)
+            img_s = Image.fromarray(img_show)
+            img_s.putpalette(PALETTE)
+            img_s.save(save_path)
 
-    color_masks = list(range(1, 256))
-    _, h, w = seg_label.shape
-    img_show = np.zeros((h, w)).astype(np.uint8)
-    for idx in range(num_mask):
-        cur_mask = seg_label[idx, :, :]
-        cur_mask = (cur_mask > 0.5).astype(np.uint8)
-        if cur_mask.sum() == 0:
-            continue
-        color_mask = color_masks[idx]
-        cur_mask_bool = cur_mask.astype(np.bool)
-        img_show[cur_mask_bool] = color_mask
+        color_masks = list(range(1, 256))
+        _, h, w = seg_label.shape
+        img_show = np.zeros((h, w)).astype(np.uint8)
+        for idx in range(num_mask):
+            cur_mask = seg_label[idx, :, :]
+            cur_mask = (cur_mask > 0.5).astype(np.uint8)
+            if cur_mask.sum() == 0:
+                print(img)
+                img_ = cv2.imread(img)
+                h, w, c = img_.shape
+                img_show = np.zeros((h, w)).astype(np.uint8)
+                img_s = Image.fromarray(img_show)
+                img_s.putpalette(PALETTE)
+                img_s.save(save_path)
+            color_mask = color_masks[idx]
+            cur_mask_bool = cur_mask.astype(np.bool)
+            img_show[cur_mask_bool] = color_mask
 
-    img_s = Image.fromarray(img_show)
-    img_s.putpalette(PALETTE)
-    img_s.save(save_path)
+        img_s = Image.fromarray(img_show)
+        img_s.putpalette(PALETTE)
+        img_s.save(save_path)
+    else:
+        print(img)
+        img_ = cv2.imread(img)
+        h, w, c = img_.shape
+        img_show = np.zeros((h, w)).astype(np.uint8)
+        img_s = Image.fromarray(img_show)
+        img_s.putpalette(PALETTE)
+        img_s.save(save_path)
 
 
 def process_data_root(data_root, img_root):

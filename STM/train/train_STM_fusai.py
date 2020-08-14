@@ -170,7 +170,6 @@ def validate(args, val_loader, model):
     for seq, batch in enumerate(progressbar):
         Fs, Ms, info = batch['Fs'], batch['Ms'], batch['info']
         num_frames = info['num_frames'][0].item()
-        valid_frames = info['valid_frames']
         # error_nums = 0
         with torch.no_grad():
             name = info['name']
