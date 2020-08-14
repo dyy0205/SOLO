@@ -26,7 +26,6 @@ import datetime
 from STM.dataloader.dataset_rgmp_v1 import DAVIS
 from STM.dataloader.tianchi_dataset import TIANCHI
 # from STM.models.model_fusai import STM
-from STM.models.model_fusai import STM
 from STM.models.loss.smooth_cross_entropy_loss import SmoothCrossEntropyLoss
 from STM.models.loss.dice_loss import DiceLoss
 
@@ -37,6 +36,7 @@ def parse_args():
     parser.add_argument('--work_dir', type=str, default='./exp/stm_reg800_v4.3',
                         help='the dir to save models.pth and logs and masks')
     parser.add_argument("--mode", type=str, default='train', help="train or val")
+    parser.add_argument("--model", type=str, default='motion', help="model type")
     parser.add_argument('--load_from', type=str,
                         default='/workspace/STM_test/user_data/model_data/model.pth')
     # train
@@ -46,9 +46,9 @@ def parse_args():
     parser.add_argument('--train_data', type=str, default='davis')
     parser.add_argument('--lr', type=float, default=1e-5)
     parser.add_argument('--clip_size', type=int, default=3)
-    parser.add_argument('--interval', type=int, default=1)
+    parser.add_argument('--interval', type=str, default='1,25', help='interval range')
     parser.add_argument('--batch_size', type=int, default=3)
-    parser.add_argument('--epoch', type=int, default=100)
+    parser.add_argument('--epoch_per_interval', type=int, default=30, help='epochs per interval')
     parser.add_argument('--save_interval', type=int, default=1)
     parser.add_argument('--validate_interval', type=int, default=1)
     parser.add_argument("--davis", type=str, default='/workspace/dataset/VOS/tianchiyusai')
@@ -168,8 +168,9 @@ def validate(args, val_loader, model):
     videos_loss = []
     progressbar = tqdm.tqdm(val_loader)
     for seq, batch in enumerate(progressbar):
-        Fs, Ms, num_objects, info = batch['Fs'], batch['Ms'], batch['num_objects'], batch['info']
+        Fs, Ms, info = batch['Fs'], batch['Ms'], batch['info']
         num_frames = info['num_frames'][0].item()
+        valid_frames = info['valid_frames']
         # error_nums = 0
         with torch.no_grad():
             name = info['name']
@@ -217,7 +218,7 @@ def validate(args, val_loader, model):
     return loss_all_videos, miou_all_videos
 
 
-def train(args, optimizer, train_loader, model, epoch_start=0, lr=1e-5):
+def train(args, optimizer, train_loader, model, epochs, epoch_start=0, lr=1e-5):
     print('training...')
     MODEL = 'STM'
     print(MODEL, 'Training on ', args.train_data)
@@ -226,8 +227,6 @@ def train(args, optimizer, train_loader, model, epoch_start=0, lr=1e-5):
     print('Start Training:', code_name)
 
     # optimizer = torch.optim.SGD(model.parameters(), lr, momentum=0.9, weight_decay=1e-4)
-
-    epochs = args.epoch
 
     for epoch in range(epoch_start, epochs):
         if args.val_at_start:
@@ -286,6 +285,27 @@ def train(args, optimizer, train_loader, model, epoch_start=0, lr=1e-5):
             loss_val, miou_val = validate(args, val_loader, model)
             log.logger.info('val loss:{:.3f}, val miou:{:.3f}'.format(loss_val, miou_val))
 
+class Logger(object):
+    level_relations = {
+        'debug': logging.DEBUG,
+        'info': logging.INFO,
+        'warning': logging.WARNING,
+        'error': logging.ERROR,
+        'crit': logging.CRITICAL
+    }  # 日志级别关系映射
+
+    def __init__(self, filename, level='info', when='D', backCount=3,
+                 fmt='%(asctime)s - %(levelname)s: %(message)s'):
+        self.logger = logging.getLogger(filename)
+        format_str = logging.Formatter(fmt)  # 设置日志格式
+        self.logger.setLevel(self.level_relations.get(level))  # 设置日志级别
+        sh = logging.StreamHandler()  # 往屏幕上输出
+        sh.setFormatter(format_str)  # 设置屏幕上显示的格式
+        th = logging.FileHandler(filename, mode='w')
+        th.setFormatter(format_str)  # 设置文件里写入的格式
+        self.logger.addHandler(sh)  # 把对象加到logger里
+        self.logger.addHandler(th)
+
 
 if __name__ == '__main__':
     args = parse_args()
@@ -294,35 +314,20 @@ if __name__ == '__main__':
         os.makedirs(args.work_dir)
 
     GPU = args.gpu
+    intervals = list(range(int(args.interval.split(',')[0]), int(args.interval.split(',')[1]) + 1))
+    epoch_per_interval = args.epoch_per_interval
+
+    model_name = args.model
+    if model_name == 'motion':
+        from STM.models.model_fusai import STM
+    elif model_name == 'aspp':
+        from STM.models.model_fusai_aspp import STM
 
     os.environ['CUDA_VISIBLE_DEVICES'] = GPU
     if torch.cuda.is_available():
         print('using Cuda devices, num:', torch.cuda.device_count())
 
     DATETIME = datetime.datetime.strftime(datetime.datetime.now(), '%Y-%m%d-%H%M%S')
-
-
-    class Logger(object):
-        level_relations = {
-            'debug': logging.DEBUG,
-            'info': logging.INFO,
-            'warning': logging.WARNING,
-            'error': logging.ERROR,
-            'crit': logging.CRITICAL
-        }  # 日志级别关系映射
-
-        def __init__(self, filename, level='info', when='D', backCount=3,
-                     fmt='%(asctime)s - %(levelname)s: %(message)s'):
-            self.logger = logging.getLogger(filename)
-            format_str = logging.Formatter(fmt)  # 设置日志格式
-            self.logger.setLevel(self.level_relations.get(level))  # 设置日志级别
-            sh = logging.StreamHandler()  # 往屏幕上输出
-            sh.setFormatter(format_str)  # 设置屏幕上显示的格式
-            th = logging.FileHandler(filename, mode='w')
-            th.setFormatter(format_str)  # 设置文件里写入的格式
-            self.logger.addHandler(sh)  # 把对象加到logger里
-            self.logger.addHandler(th)
-
 
     log_path = os.path.join(args.work_dir, 'ckpt', DATETIME)
     if not os.path.exists(log_path):
@@ -334,8 +339,10 @@ if __name__ == '__main__':
     DAVIS_ROOT = args.davis
     palette = Image.open(DAVIS_ROOT + '/Annotations/606332/00000.png').getpalette()
 
-    val_dataset = DAVIS(DAVIS_ROOT, phase='val', imset='tianchi_val_cf.txt', resolution='480p',
-                        separate_instance=True, only_single=False, target_size=(864, 480))
+    # val_dataset = DAVIS(DAVIS_ROOT, phase='val', imset='tianchi_val_cf.txt', resolution='480p',
+    #                     separate_instance=True, only_single=False, target_size=(864, 480))
+    val_dataset = TIANCHI(DAVIS_ROOT, phase='val', imset='tianchi_val_cf.txt', separate_instance=True,
+                          target_size=(864, 480), same_frames=True)
     val_loader = data.DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 
     model = nn.DataParallel(STM())
@@ -358,13 +365,6 @@ if __name__ == '__main__':
         BATCH_SIZE = args.batch_size
         interval = args.interval
 
-        # prepare training data
-        train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train_cf.txt', separate_instance=True,
-                                only_single=False, target_size=(864, 480), clip_size=clip_size, mode='sequence',
-                                interval=interval)
-        train_loader = data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0,
-                                       pin_memory=True)
-
         epoch_start = 0
         lr = args.lr
         optimizer = torch.optim.Adam(model.parameters(), lr, betas=(0.9, 0.99))
@@ -373,11 +373,21 @@ if __name__ == '__main__':
             print('resume from:', args.resume_from)
             ckpt = torch.load(args.resume_from)
             model.load_state_dict(ckpt['state_dict'], strict=False)
-            epoch_start = ckpt['epoch'] + 1
+            # epoch_start = ckpt['epoch'] + 1
             # if 'lr' in ckpt.keys():
             #     lr = ckpt['lr']
             if 'optimizer' in ckpt.keys():
                 optimizer.load_state_dict(ckpt['optimizer'])
 
         # run train
-        train(args, optimizer, train_loader, model, epoch_start, lr)
+        for i in intervals:
+            log.logger.info('Training interval:{}'.format(i))
+            # prepare training data
+            train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train_cf.txt', separate_instance=True,
+                                    only_single=False, target_size=(864, 480), clip_size=clip_size, mode='sequence',
+                                    interval=i)
+            train_loader = data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0,
+                                           pin_memory=True)
+
+            train(args, optimizer, train_loader, model, epoch_per_interval, epoch_start, lr)
+            epoch_start += epoch_per_interval

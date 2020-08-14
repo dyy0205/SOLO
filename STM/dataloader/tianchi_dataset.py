@@ -69,9 +69,10 @@ class TIANCHI(data.Dataset):
     Dataset for YOUTUBE to train
     '''
 
-    def __init__(self, root, phase, imset='2016/val.txt', separate_instance=False, only_single=False,
-                 target_size=(864, 480), clip_size=None, only_multiple=False, mode='sample', interval=1):
-        assert phase in ['train']
+    def __init__(self, root, phase='train', imset='2016/val.txt', separate_instance=False, only_single=False,
+                 target_size=(864, 480), clip_size=3, only_multiple=False, mode='sample', interval=1,
+                 same_frames=False):
+        assert phase in ['train', 'test', 'val']
         self.phase = phase
         self.root = root
         self.clip_size = clip_size
@@ -85,6 +86,7 @@ class TIANCHI(data.Dataset):
         self.interval = interval
         assert not (self.OM and self.OS)
         assert mode in ('sample', 'sequence')
+        self.same_frames = same_frames
 
         self.mask_dir = os.path.join(root, 'Annotations')
         self.image_dir = os.path.join(root, 'JPEGImages')
@@ -150,6 +152,11 @@ class TIANCHI(data.Dataset):
                     # self.num_objects[_video] = np.max(_mask)
                     self.shape[_video] = np.shape(_mask)
 
+        if same_frames:
+            self.max_frames = max(self.num_frames.values())
+        else:
+            self.max_frames = 0
+
     def __len__(self):
         return len(self.videos)
 
@@ -167,11 +174,13 @@ class TIANCHI(data.Dataset):
         # print('phase',self.phase,self.clip_size)
         if isinstance(self.clip_size, int) and self.phase == 'train':
             # final_clip_size = self.clip_size
-            final_clip_size = min(self.clip_size,self.num_frames[video])
+            final_clip_size = min(self.clip_size, self.num_frames[video])
         elif self.clip_size == 'all' and self.phase == 'train':
             final_clip_size = self.num_frames[video]
-        elif self.phase == 'val' and (self.clip_size is None):
+        elif (self.phase == 'val' or self.phase == 'test') and not self.same_frames:
             final_clip_size = self.num_frames[video]
+        elif (self.phase == 'val' or self.phase == 'test') and self.same_frames:
+            final_clip_size = self.max_frames
         else:
             print(f'wrong clip_size, should be an Integer but got {self.clip_size} and phase {self.phase}')
             raise ValueError
@@ -179,6 +188,7 @@ class TIANCHI(data.Dataset):
         info = {}
         info['name'] = video
         info['num_frames'] = final_clip_size
+        info['valid_frames'] = np.zeros(final_clip_size)
 
         N_frames = np.empty((final_clip_size,) + self.shape[video] + (3,), dtype=np.float32)
         N_masks = np.empty((final_clip_size,) + self.shape[video], dtype=np.uint8)
@@ -189,15 +199,17 @@ class TIANCHI(data.Dataset):
             p.append(frames - 1)
             frames_num = []
             for i in range(final_clip_size):
-                frames_num.append(random.randint(p[i], p[i+1]))
+                frames_num.append(random.randint(p[i], p[i + 1]))
         elif self.phase == 'train' and final_clip_size < self.num_frames[video] and self.mode == 'sequence':
             start_frame = random.randint(0, self.num_frames[video] - final_clip_size * self.interval - 1)
             frames_num = [start_frame + i * self.interval for i in range(final_clip_size)]
+        elif self.same_frames:
+            frames_num = list(range(self.num_frames[video]))
         else:
             frames_num = list(range(final_clip_size))
 
-
-        for f in range(final_clip_size):
+        for f in range(len(frames_num)):
+            info['valid_frames'][f] = 1
             img_file = os.path.join(self.image_dir, video_true_name, self.frame_list[video][frames_num[f]])
             N_frames[f] = np.array(
                 Image.open(img_file).convert('RGB').resize(self.target_size, Image.BILINEAR)) / 255.
