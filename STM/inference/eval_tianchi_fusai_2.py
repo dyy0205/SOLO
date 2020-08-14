@@ -22,7 +22,8 @@ import zipfile
 from functools import wraps
 
 ### My libs
-from STM.models.model import STM
+from STM.models.model_fusai import STM
+from STM.train.train_STM_fusai import Run_video
 from STM.dataset import TIANCHI
 
 torch.set_grad_enabled(False)  # Volatile
@@ -40,44 +41,44 @@ def fn_timer(function):
     return function_timer
 
 
-def Run_video(model, Fs, Ms, num_frames, Mem_every=None, Mem_number=None):
-    # print('name:', name)
-    # initialize storage tensors
-    if Mem_every:
-        to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
-    elif Mem_number:
-        to_memorize = [int(round(i)) for i in np.linspace(0, num_frames, num=Mem_number + 2)[:-1]]
-    else:
-        raise NotImplementedError
-
-    b, c, t, h, w = Fs.shape
-    Es = torch.zeros((b, 1, t, h, w)).float().cuda()  # [1,1,50,480,864][b,c,t,h,w]
-    Es[:, :, 0] = Ms[:, :, 0]
-
-    for t in range(1, num_frames):
-        # memorize
-        pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
-        pre_key = pre_key.unsqueeze(2)
-        pre_value = pre_value.unsqueeze(2)
-
-        if t - 1 == 0:  # the first frame
-            this_keys_m, this_values_m = pre_key, pre_value
-        else:  # other frame
-            this_keys_m = torch.cat([keys, pre_key], dim=2)
-            this_values_m = torch.cat([values, pre_value], dim=2)
-
-        # segment
-        logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m])  # B 2 h w
-        em = F.softmax(logits, dim=1)[:, 1]  # B h w
-        Es[:, 0, t] = em
-
-        # update key and value
-        if t - 1 in to_memorize:
-            keys, values = this_keys_m, this_values_m
-
-    pred = torch.round(Es.float())
-
-    return pred, Es
+# def Run_video(model, Fs, Ms, num_frames, Mem_every=None, Mem_number=None):
+#     # print('name:', name)
+#     # initialize storage tensors
+#     if Mem_every:
+#         to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
+#     elif Mem_number:
+#         to_memorize = [int(round(i)) for i in np.linspace(0, num_frames, num=Mem_number + 2)[:-1]]
+#     else:
+#         raise NotImplementedError
+#
+#     b, c, t, h, w = Fs.shape
+#     Es = torch.zeros((b, 1, t, h, w)).float().cuda()  # [1,1,50,480,864][b,c,t,h,w]
+#     Es[:, :, 0] = Ms[:, :, 0]
+#
+#     for t in range(1, num_frames):
+#         # memorize
+#         pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
+#         pre_key = pre_key.unsqueeze(2)
+#         pre_value = pre_value.unsqueeze(2)
+#
+#         if t - 1 == 0:  # the first frame
+#             this_keys_m, this_values_m = pre_key, pre_value
+#         else:  # other frame
+#             this_keys_m = torch.cat([keys, pre_key], dim=2)
+#             this_values_m = torch.cat([values, pre_value], dim=2)
+#
+#         # segment
+#         logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m])  # B 2 h w
+#         em = F.softmax(logits, dim=1)[:, 1]  # B h w
+#         Es[:, 0, t] = em
+#
+#         # update key and value
+#         if t - 1 in to_memorize:
+#             keys, values = this_keys_m, this_values_m
+#
+#     pred = torch.round(Es.float())
+#
+#     return pred, Es
 
 
 def blend_results(tmp_dir, merge_dir, data_dir):
@@ -110,6 +111,7 @@ def blend_results(tmp_dir, merge_dir, data_dir):
         if not os.path.exists(video_dir):
             os.makedirs(video_dir)
         if len(ins) == 1:
+            # only one instance, no need for blend
             for t in range(num_frames):
                 path = os.path.join(tmp_dir, name + '_1', '{}.png'.format(VIDEO_FRAMES[name][t]))
                 mask = Image.open(path).convert('P').resize((w, h))
@@ -122,9 +124,7 @@ def blend_results(tmp_dir, merge_dir, data_dir):
                     path = os.path.join(tmp_dir, name + '_{}'.format(j),
                                         '{}.png'.format(VIDEO_FRAMES[name][t]))
                     temp = np.array(Image.open(path).convert('P').resize((w, h)), dtype=np.uint8)
-                    temp[temp == 1] = j
-                    mask += temp
-                    mask[mask > j] = j
+                    mask[(temp == 1)] = j
                 # print(len(ins), np.unique(mask))
                 mask = Image.fromarray(mask)
                 mask.putpalette(palette)
@@ -182,7 +182,7 @@ def main(data_root, model_path, palette):
 
         print('[{}]: num_frames: {}'.format(seq_name, num_frames))
 
-        pred, Es = Run_video(model, Fs, Ms, num_frames, Mem_every=5, Mem_number=None)
+        pred, Es = Run_video(model, Fs, Ms, num_frames, Mem_every=5, Mem_number=None, mode='test')
 
         # Save results for quantitative eval ######################
         test_path = os.path.join(TMP_PATH, seq_name)
@@ -208,7 +208,6 @@ def mask_inference(data_dir, config, ckpt, out_dir):
     print('Total images: {}'.format(imgs))
     generate_imagesets(data_dir, imgs)
     for img in imgs:
-        # img = '/workspace/solo/test/00001.jpg'
         result, cost_time = inference_detector(model, img)
         result = filter_result(result, max_num=3)
         save_mask(img, result, MASK_THR, out_dir)
@@ -228,6 +227,8 @@ def filter_result(result, index=0, max_num=3):
     assert isinstance(result, list)
     rr = []
     for r in result:
+        if r is None:
+            return rr
         mask, cate, score = r
         idxs = cate == index
         score = score[idxs]
@@ -248,35 +249,56 @@ def save_mask(img, result, score_thr, out_dir):
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path))
 
-    cur_result = result[0]
-    seg_label = cur_result[0]
-    seg_label = seg_label.cpu().numpy().astype(np.uint8)
-    cate_label = cur_result[1]
-    cate_label = cate_label.cpu().numpy()
-    score = cur_result[2].cpu().numpy()
+    if result != []:
+        cur_result = result[0]
+        seg_label = cur_result[0]
+        seg_label = seg_label.cpu().numpy().astype(np.uint8)
+        cate_label = cur_result[1]
+        cate_label = cate_label.cpu().numpy()
+        score = cur_result[2].cpu().numpy()
 
-    vis_inds = score >= score_thr
-    seg_label = seg_label[vis_inds]
-    num_mask = seg_label.shape[0]
+        vis_inds = score >= score_thr
+        seg_label = seg_label[vis_inds]
+        num_mask = seg_label.shape[0]
 
-    if num_mask == 0:
-        return 0
+        if num_mask == 0:
+            print(img)
+            img_ = cv2.imread(img)
+            h, w, c = img_.shape
+            img_show = np.zeros((h, w)).astype(np.uint8)
+            img_s = Image.fromarray(img_show)
+            img_s.putpalette(PALETTE)
+            img_s.save(save_path)
 
-    color_masks = list(range(1, 256))
-    _, h, w = seg_label.shape
-    img_show = np.zeros((h, w)).astype(np.uint8)
-    for idx in range(num_mask):
-        cur_mask = seg_label[idx, :, :]
-        cur_mask = (cur_mask > 0.5).astype(np.uint8)
-        if cur_mask.sum() == 0:
-            continue
-        color_mask = color_masks[idx]
-        cur_mask_bool = cur_mask.astype(np.bool)
-        img_show[cur_mask_bool] = color_mask
+        color_masks = list(range(1, 256))
+        _, h, w = seg_label.shape
+        img_show = np.zeros((h, w)).astype(np.uint8)
+        for idx in range(num_mask):
+            cur_mask = seg_label[idx, :, :]
+            cur_mask = (cur_mask > 0.5).astype(np.uint8)
+            if cur_mask.sum() == 0:
+                print(img)
+                img_ = cv2.imread(img)
+                h, w, c = img_.shape
+                img_show = np.zeros((h, w)).astype(np.uint8)
+                img_s = Image.fromarray(img_show)
+                img_s.putpalette(PALETTE)
+                img_s.save(save_path)
+            color_mask = color_masks[idx]
+            cur_mask_bool = cur_mask.astype(np.bool)
+            img_show[cur_mask_bool] = color_mask
 
-    img_s = Image.fromarray(img_show)
-    img_s.putpalette(PALETTE)
-    img_s.save(save_path)
+        img_s = Image.fromarray(img_show)
+        img_s.putpalette(PALETTE)
+        img_s.save(save_path)
+    else:
+        print(img)
+        img_ = cv2.imread(img)
+        h, w, c = img_.shape
+        img_show = np.zeros((h, w)).astype(np.uint8)
+        img_s = Image.fromarray(img_show)
+        img_s.putpalette(PALETTE)
+        img_s.save(save_path)
 
 
 def process_data_root(data_root, img_root):
@@ -316,8 +338,8 @@ def analyse_images(data_root):
 
 if __name__ == '__main__':
     DATA_ROOT = '/workspace/solo/code/user_data/data'
-    IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
-    MODEL_PATH = '/workspace/solo/code/user_data/model_data/model.pth'
+    IMG_ROOT = '/workspace/dataset/VOS/test_dataset/JPEGImages/'
+    MODEL_PATH = '/workspace/solo/code/user_data/model_data/ckpt_196e.pth'
     SAVE_PATH = '/workspace/solo/code/user_data/'
     TMP_PATH = '/workspace/solo/code/user_data/tmp_data'
     MERGE_PATH = '/workspace/solo/code/user_data/merge_data'

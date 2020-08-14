@@ -4,6 +4,10 @@ from torch.autograd import Variable
 from torch.utils import data
 
 import torch.nn as nn
+import torch.nn.functional as F
+import torch.nn.init as init
+import torch.utils.model_zoo as model_zoo
+from torchvision import models
 from mmdet.apis import init_detector, inference_detector, show_result_pyplot, show_result_ins
 import mmcv
 import os, glob, time
@@ -77,7 +81,7 @@ def fn_timer(function):
 #     return pred, Es
 
 
-def blend_results(tmp_dir, merge_dir, data_dir):
+def blend_results(tmp_dir, score_dir, merge_dir, data_dir):
     print('Blending results...')
     img_root = os.path.join(data_dir, 'JPEGImages')
     ann_root = os.path.join(data_dir, 'Annotations')
@@ -116,11 +120,16 @@ def blend_results(tmp_dir, merge_dir, data_dir):
         else:
             for t in range(num_frames):
                 mask = np.zeros((h, w), dtype=np.uint8)
+                score_mask = np.zeros((h, w), dtype=np.uint8)
                 for j in range(1, len(ins) + 1):
                     path = os.path.join(tmp_dir, name + '_{}'.format(j),
                                         '{}.png'.format(VIDEO_FRAMES[name][t]))
+                    score = os.path.join(score_dir, name + '_{}'.format(j),
+                                        '{}.jpg'.format(VIDEO_FRAMES[name][t]))
                     temp = np.array(Image.open(path).convert('P').resize((w, h)), dtype=np.uint8)
-                    mask[(temp == 1)] = j
+                    score_temp = cv2.imread(score, 0) / 255
+                    mask[(temp == 1) & (score_temp > score_mask)] = j
+                    score_mask = np.array([score_mask, score_temp]).max(axis=0)
                 # print(len(ins), np.unique(mask))
                 mask = Image.fromarray(mask)
                 mask.putpalette(palette)
@@ -182,13 +191,21 @@ def main(data_root, model_path, palette):
 
         # Save results for quantitative eval ######################
         test_path = os.path.join(TMP_PATH, seq_name)
+        score_path = os.path.join(SCORE_PATH, seq_name)
         if not os.path.exists(test_path):
             os.makedirs(test_path)
+        if not os.path.exists(score_path):
+            os.makedirs(score_path)
         for f in range(num_frames):
             img_E = Image.fromarray(pred[0, 0, f].cpu().numpy().astype(np.uint8))
             img_E.putpalette(palette)
             img_E = img_E.resize(ori_shape[::-1])
             img_E.save(os.path.join(test_path, '{}.png'.format(VIDEO_FRAMES[video_name][f])))
+
+            score = Es[0, 0, f].cpu().numpy() * 255
+            score = score.astype(np.uint8)
+            score = cv2.resize(score, tuple(ori_shape[::-1]))
+            cv2.imwrite(os.path.join(score_path, '{}.jpg'.format(VIDEO_FRAMES[video_name][f])), score)
 
 
 @fn_timer
@@ -204,7 +221,6 @@ def mask_inference(data_dir, config, ckpt, out_dir):
     print('Total images: {}'.format(imgs))
     generate_imagesets(data_dir, imgs)
     for img in imgs:
-        # img = '/workspace/solo/test/00001.jpg'
         result, cost_time = inference_detector(model, img)
         result = filter_result(result, max_num=3)
         save_mask(img, result, MASK_THR, out_dir)
@@ -224,6 +240,8 @@ def filter_result(result, index=0, max_num=3):
     assert isinstance(result, list)
     rr = []
     for r in result:
+        if r is None:
+            return rr
         mask, cate, score = r
         idxs = cate == index
         score = score[idxs]
@@ -244,35 +262,56 @@ def save_mask(img, result, score_thr, out_dir):
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path))
 
-    cur_result = result[0]
-    seg_label = cur_result[0]
-    seg_label = seg_label.cpu().numpy().astype(np.uint8)
-    cate_label = cur_result[1]
-    cate_label = cate_label.cpu().numpy()
-    score = cur_result[2].cpu().numpy()
+    if result != []:
+        cur_result = result[0]
+        seg_label = cur_result[0]
+        seg_label = seg_label.cpu().numpy().astype(np.uint8)
+        cate_label = cur_result[1]
+        cate_label = cate_label.cpu().numpy()
+        score = cur_result[2].cpu().numpy()
 
-    vis_inds = score >= score_thr
-    seg_label = seg_label[vis_inds]
-    num_mask = seg_label.shape[0]
+        vis_inds = score >= score_thr
+        seg_label = seg_label[vis_inds]
+        num_mask = seg_label.shape[0]
 
-    if num_mask == 0:
-        return 0
+        if num_mask == 0:
+            print(img)
+            img_ = cv2.imread(img)
+            h, w, c = img_.shape
+            img_show = np.zeros((h, w)).astype(np.uint8)
+            img_s = Image.fromarray(img_show)
+            img_s.putpalette(PALETTE)
+            img_s.save(save_path)
 
-    color_masks = list(range(1, 256))
-    _, h, w = seg_label.shape
-    img_show = np.zeros((h, w)).astype(np.uint8)
-    for idx in range(num_mask):
-        cur_mask = seg_label[idx, :, :]
-        cur_mask = (cur_mask > 0.5).astype(np.uint8)
-        if cur_mask.sum() == 0:
-            continue
-        color_mask = color_masks[idx]
-        cur_mask_bool = cur_mask.astype(np.bool)
-        img_show[cur_mask_bool] = color_mask
+        color_masks = list(range(1, 256))
+        _, h, w = seg_label.shape
+        img_show = np.zeros((h, w)).astype(np.uint8)
+        for idx in range(num_mask):
+            cur_mask = seg_label[idx, :, :]
+            cur_mask = (cur_mask > 0.5).astype(np.uint8)
+            if cur_mask.sum() == 0:
+                print(img)
+                img_ = cv2.imread(img)
+                h, w, c = img_.shape
+                img_show = np.zeros((h, w)).astype(np.uint8)
+                img_s = Image.fromarray(img_show)
+                img_s.putpalette(PALETTE)
+                img_s.save(save_path)
+            color_mask = color_masks[idx]
+            cur_mask_bool = cur_mask.astype(np.bool)
+            img_show[cur_mask_bool] = color_mask
 
-    img_s = Image.fromarray(img_show)
-    img_s.putpalette(PALETTE)
-    img_s.save(save_path)
+        img_s = Image.fromarray(img_show)
+        img_s.putpalette(PALETTE)
+        img_s.save(save_path)
+    else:
+        print(img)
+        img_ = cv2.imread(img)
+        h, w, c = img_.shape
+        img_show = np.zeros((h, w)).astype(np.uint8)
+        img_s = Image.fromarray(img_show)
+        img_s.putpalette(PALETTE)
+        img_s.save(save_path)
 
 
 def process_data_root(data_root, img_root):
@@ -311,23 +350,23 @@ def analyse_images(data_root):
 
 
 if __name__ == '__main__':
-    DATA_ROOT = '/workspace/user_data/data'
-    IMG_ROOT = '/tcdata'
-    MODEL_PATH = '/workspace/user_data/model_data/ckpt_196e.pth'
-    SAVE_PATH = '/workspace'
-    TMP_PATH = '/workspace/user_data/tmp_data'
-    SCORE_PATH = '/workspace/user_data/score_data'
-    MERGE_PATH = '/workspace/user_data/merge_data'
+    DATA_ROOT = '/workspace/solo/code/user_data/data'
+    IMG_ROOT = '/workspace/dataset/VOS/test_dataset/JPEGImages/'
+    MODEL_PATH = '/workspace/solo/code/user_data/model_data/ckpt_196e.pth'
+    SAVE_PATH = '/workspace/solo/code/user_data/'
+    TMP_PATH = '/workspace/solo/code/user_data/tmp_data'
+    SCORE_PATH = '/workspace/solo/code/user_data/score_data'
+    MERGE_PATH = '/workspace/solo/code/user_data/merge_data'
     MASK_PATH = os.path.join(DATA_ROOT, 'Annotations')
 
     if IMG_ROOT is not None or IMG_ROOT != '':
         process_data_root(DATA_ROOT, IMG_ROOT)
     check_data_root(DATA_ROOT)
 
-    CONFIG_FILE = r'/workspace/cfg/aug_solov2_r101_imgaug.py'
-    CKPT_FILE = r'/workspace/user_data/model_data/solov2_r101_ssim.pth'
+    CONFIG_FILE = r'/workspace/solo/code/cfg/aug_solov2_r101_imgaug.py'
+    CKPT_FILE = r'/workspace/solo/code/user_data/model_data/solov2_r101_ssim.pth'
 
-    TEMPLATE_MASK = r'/workspace/user_data/template_data/00001.png'
+    TEMPLATE_MASK = r'/workspace/solo/code/user_data/template_data/00001.png'
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 

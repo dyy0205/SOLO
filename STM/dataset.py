@@ -10,6 +10,7 @@ from torch.utils import data
 import glob
 import imgaug as ia
 import imgaug.augmenters as iaa
+import cv2
 
 
 class TIANCHI(data.Dataset):
@@ -17,11 +18,12 @@ class TIANCHI(data.Dataset):
     Dataset for DAVIS
     '''
 
-    def __init__(self, root, imset='2017/train.txt', single_object=True, target_size=(864, 480)):
+    def __init__(self, root, imset='2017/train.txt', single_object=True, target_size=(864, 480), test_aug=False):
         self.root = root
         self.mask_dir = os.path.join(root, 'Annotations')
         self.image_dir = os.path.join(root, 'JPEGImages')
         self.target_size = target_size
+        self.test_aug = test_aug
 
         self.single_object = single_object
         _imset_dir = os.path.join(root, 'ImageSets')
@@ -100,8 +102,11 @@ class TIANCHI(data.Dataset):
         N_masks = np.empty((1,) + self.target_size[::-1], dtype=np.uint8)
         for f in range(self.num_frames[video]):
             img_file = os.path.join(self.image_dir, video_true_name, self.frame_list[video][f])
-            N_frames[f] = np.array(
-                Image.open(img_file).convert('RGB').resize(self.target_size, Image.ANTIALIAS)) / 255.
+            frame_image = np.array(
+                Image.open(img_file).convert('RGB').resize(self.target_size, Image.ANTIALIAS))
+            if self.test_aug:
+                frame_image = self.test_augmentation(frame_image)
+            N_frames[f] = frame_image / 255.
 
         mask_file = os.path.join(self.mask_dir, video_true_name, self.mask_list[video][0])
         temp = np.array(Image.open(mask_file).convert('P').resize(self.target_size, Image.NEAREST), dtype=np.uint8)
@@ -160,6 +165,14 @@ class TIANCHI(data.Dataset):
         images_aug = seq_f(images=images_aug)
 
         return images_aug, masks_aug
+
+    def test_augmentation(self, src):
+        dst = np.zeros_like(src)
+        for i in range(3):
+            channel = src[:, :, i]
+            eh = cv2.equalizeHist(channel)
+            dst[:, :, i] = eh
+        return dst
 
 
 if __name__ == '__main__':

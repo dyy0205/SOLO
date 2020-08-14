@@ -26,7 +26,7 @@ import datetime
 from STM.dataloader.dataset_rgmp_v1 import DAVIS
 from STM.dataloader.tianchi_dataset import TIANCHI
 # from STM.models.model_fusai import STM
-from STM.models.model_fusai import STM
+from STM.models.model_fusai_aspp import STM
 from STM.models.loss.smooth_cross_entropy_loss import SmoothCrossEntropyLoss
 from STM.models.loss.dice_loss import DiceLoss
 
