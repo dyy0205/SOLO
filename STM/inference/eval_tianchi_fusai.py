@@ -206,7 +206,7 @@ def mask_inference(data_dir, config, ckpt, out_dir):
     for img in imgs:
         # img = '/workspace/solo/test/00001.jpg'
         result, cost_time = inference_detector(model, img)
-        result = filter_result(result, max_num=3)
+        result = filter_result(result, max_num=MAX_NUM)
         save_mask(img, result, MASK_THR, out_dir)
 
 
@@ -316,7 +316,6 @@ if __name__ == '__main__':
     MODEL_PATH = '/workspace/user_data/model_data/ckpt_196e.pth'
     SAVE_PATH = '/workspace'
     TMP_PATH = '/workspace/user_data/tmp_data'
-    SCORE_PATH = '/workspace/user_data/score_data'
     MERGE_PATH = '/workspace/user_data/merge_data'
     MASK_PATH = os.path.join(DATA_ROOT, 'Annotations')
 
@@ -324,16 +323,17 @@ if __name__ == '__main__':
         process_data_root(DATA_ROOT, IMG_ROOT)
     check_data_root(DATA_ROOT)
 
-    CONFIG_FILE = r'/workspace/cfg/aug_solov2_r101_imgaug.py'
-    CKPT_FILE = r'/workspace/user_data/model_data/solov2_r101_ssim.pth'
+    CONFIG_FILE = r'/workspace/cfg/aug_solov2_r101.py'
+    CKPT_FILE = r'/workspace/user_data/model_data/solov2_9cls.pth'
 
     TEMPLATE_MASK = r'/workspace/user_data/template_data/00001.png'
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
     MASK_THR = 0.2
+    MAX_NUM = 4
 
     mask_inference(DATA_ROOT, CONFIG_FILE, CKPT_FILE, MASK_PATH)
     main(DATA_ROOT, MODEL_PATH, PALETTE)
-    blend_results(TMP_PATH, SCORE_PATH, MERGE_PATH, DATA_ROOT)
+    blend_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
     zip_result(MERGE_PATH, SAVE_PATH)

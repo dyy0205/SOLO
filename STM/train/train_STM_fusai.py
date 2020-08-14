@@ -380,14 +380,16 @@ if __name__ == '__main__':
                 optimizer.load_state_dict(ckpt['optimizer'])
 
         # run train
+        end_epochs = epoch_per_interval
         for i in intervals:
             log.logger.info('Training interval:{}'.format(i))
             # prepare training data
-            train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train_cf.txt', separate_instance=True,
+            train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='test_train.txt', separate_instance=True,
                                     only_single=False, target_size=(864, 480), clip_size=clip_size, mode='sequence',
                                     interval=i)
             train_loader = data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0,
                                            pin_memory=True)
 
-            train(args, optimizer, train_loader, model, epoch_per_interval, epoch_start, lr)
+            train(args, optimizer, train_loader, model, end_epochs, epoch_start, lr)
             epoch_start += epoch_per_interval
+            end_epochs += epoch_per_interval

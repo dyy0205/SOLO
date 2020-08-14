@@ -349,8 +349,8 @@ if __name__ == '__main__':
         process_data_root(DATA_ROOT, IMG_ROOT)
     check_data_root(DATA_ROOT)
 
-    CONFIG_FILE = r'/workspace/solo/code/cfg/aug_solov2_r101_imgaug.py'
-    CKPT_FILE = r'/workspace/solo/code/user_data/model_data/solov2_r101_ssim.pth'
+    CONFIG_FILE = r'/workspace/solo/code/cfg/aug_solov2_r101.py'
+    CKPT_FILE = r'/workspace/solo/code/user_data/model_data/solov2_9cls.pth'
 
     TEMPLATE_MASK = r'/workspace/solo/code/user_data/template_data/00001.png'
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
