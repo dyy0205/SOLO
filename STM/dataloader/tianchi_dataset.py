@@ -200,9 +200,11 @@ class TIANCHI(data.Dataset):
             frames_num = []
             for i in range(final_clip_size):
                 frames_num.append(random.randint(p[i], p[i + 1]))
-        elif self.phase == 'train' and final_clip_size < self.num_frames[video] and self.mode == 'sequence':
-            start_frame = random.randint(0, self.num_frames[video] - final_clip_size * self.interval - 1)
+        elif self.phase == 'train' and final_clip_size <= self.num_frames[video] and self.mode == 'sequence':
+            ed = max(self.num_frames[video] - (final_clip_size - 1) * self.interval - 1, 0)
+            start_frame = random.randint(0, ed)
             frames_num = [start_frame + i * self.interval for i in range(final_clip_size)]
+            frames_num = [min(self.num_frames[video] - 1, fn) for fn in frames_num]
         elif self.same_frames:
             frames_num = list(range(self.num_frames[video]))
         else:

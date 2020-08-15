@@ -358,8 +358,12 @@ if __name__ == '__main__':
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
     MASK_THR = 0.2
+    MAX_NUM = 4
 
-    mask_inference(DATA_ROOT, CONFIG_FILE, CKPT_FILE, MASK_PATH)
+    mask_inference(DATA_ROOT, VIDEO_FRAMES, CONFIG_FILE, CKPT_FILE, MASK_PATH,
+                   max_num=MAX_NUM,
+                   mask_thr=MASK_THR,
+                   palette=PALETTE)
     main(DATA_ROOT, MODEL_PATH, PALETTE)
     blend_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
     zip_result(MERGE_PATH, SAVE_PATH)

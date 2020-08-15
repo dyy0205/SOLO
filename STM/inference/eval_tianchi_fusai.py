@@ -16,11 +16,14 @@ import cv2
 import numpy as np
 import zipfile
 from functools import wraps
+import random
+import numpy as np
 
 ### My libs
 from STM.models.model_fusai import STM
 from STM.train.train_STM_fusai import Run_video
 from STM.dataset import TIANCHI
+from STM.tools.generate_videos import generate_videos
 
 torch.set_grad_enabled(False)  # Volatile
 
@@ -96,10 +99,7 @@ def blend_results(tmp_dir, merge_dir, data_dir):
 
     for i, name in enumerate(test):
         num_frames = len(glob.glob(os.path.join(img_root, name, '*.jpg')))
-        ann_path = os.path.join(ann_root, name, '{}.png'.format(VIDEO_FRAMES[name][0]))
-        mask_f = Image.open(ann_path)
-        w, h = mask_f.size
-        palette = mask_f.getpalette()
+        palette = PALETTE
         ins = [ins for ins in ins_lst if ins.startswith(name)]
         print(i, name, len(ins))
 
@@ -110,7 +110,7 @@ def blend_results(tmp_dir, merge_dir, data_dir):
             # only one instance, no need for blend
             for t in range(num_frames):
                 path = os.path.join(tmp_dir, name + '_1', '{}.png'.format(VIDEO_FRAMES[name][t]))
-                mask = Image.open(path).convert('P').resize((w, h))
+                mask = Image.open(path).convert('P')
                 mask.putpalette(palette)
                 mask.save(os.path.join(video_dir, '{}.png'.format(VIDEO_FRAMES[name][t])))
         else:
@@ -119,7 +119,7 @@ def blend_results(tmp_dir, merge_dir, data_dir):
                 for j in range(1, len(ins) + 1):
                     path = os.path.join(tmp_dir, name + '_{}'.format(j),
                                         '{}.png'.format(VIDEO_FRAMES[name][t]))
-                    temp = np.array(Image.open(path).convert('P').resize((w, h)), dtype=np.uint8)
+                    temp = np.array(Image.open(path).convert('P'), dtype=np.uint8)
                     mask[(temp == 1)] = j
                 # print(len(ins), np.unique(mask))
                 mask = Image.fromarray(mask)
@@ -139,7 +139,7 @@ def zip_result(result_dir, save_path):
 
 
 @fn_timer
-def main(data_root, model_path, palette):
+def vos_infer(data_root, model_path, palette):
     # Model and version
     MODEL = 'STM'
     print(MODEL, ': Testing on TIANCHI...')
@@ -169,50 +169,108 @@ def main(data_root, model_path, palette):
     print('Start Testing:', code_name)
 
     for seq, V in enumerate(Testloader):
-        Fs, Ms, info = V
-        seq_name = info['name'][0]
-        ori_shape = info['ori_shape']
-        num_frames = info['num_frames'][0].item()
-        if '_' in seq_name:
-            video_name = seq_name.split('_')[0]
+        if len(V) == 3:
+            Fs, Ms, info = V
+            seq_name = info['name'][0]
+            ori_shape = info['ori_shape']
+            num_frames = info['num_frames'][0].item()
+            mode = info['mode']
+            if '_' in seq_name:
+                video_name = seq_name.split('_')[0]
+            if mode == 0:
+                frame_list = VIDEO_FRAMES[video_name]
+            else:
+                frame_list = VIDEO_FRAMES[video_name][::-1]
 
-        print('[{}]: num_frames: {}'.format(seq_name, num_frames))
 
-        pred, Es = Run_video(model, Fs, Ms, num_frames, Mem_every=5, Mem_number=None, mode='test')
+            print('[{}]: num_frames: {}'.format(seq_name, num_frames))
 
-        # Save results for quantitative eval ######################
-        test_path = os.path.join(TMP_PATH, seq_name)
-        if not os.path.exists(test_path):
-            os.makedirs(test_path)
-        for f in range(num_frames):
-            img_E = Image.fromarray(pred[0, 0, f].cpu().numpy().astype(np.uint8))
-            img_E.putpalette(palette)
-            img_E = img_E.resize(ori_shape[::-1])
-            img_E.save(os.path.join(test_path, '{}.png'.format(VIDEO_FRAMES[video_name][f])))
+            pred, Es = Run_video(model, Fs, Ms, num_frames, Mem_every=5, Mem_number=None, mode='test')
+
+            # Save results for quantitative eval ######################
+            test_path = os.path.join(TMP_PATH, seq_name)
+            if not os.path.exists(test_path):
+                os.makedirs(test_path)
+            for f in range(num_frames):
+                img_E = Image.fromarray(pred[0, 0, f].cpu().numpy().astype(np.uint8))
+                img_E.putpalette(palette)
+                img_E = img_E.resize(ori_shape[::-1])
+                img_E.save(os.path.join(test_path, '{}.png'.format(frame_list[f])))
+
+        elif len(V) == 4:
+            print('Start at middle frame!')
+            Fs_p, Fs_r, Ms, info = V
+            seq_name = info['name'][0]
+            ori_shape = info['ori_shape']
+            num_frames = info['num_frames'][0].item()
+            start_index = info['start_index']
+            if '_' in seq_name:
+                video_name = seq_name.split('_')[0]
+
+            _, _, prev_frame_num, _, _ = Fs_p.shape
+            _, _, rear_frame_num, _, _ = Fs_r.shape
+            prev_frame_list = VIDEO_FRAMES[video_name][:start_index+1][::-1]
+            rear_frame_list = VIDEO_FRAMES[video_name][start_index:]
+
+
+            print('[{}]: num_frames: {}'.format(seq_name, num_frames))
+
+            pred, Es = Run_video(model, Fs_p, Ms, prev_frame_num, Mem_every=5, Mem_number=None, mode='test')
+            pred_r, Es_r = Run_video(model, Fs_r, Ms, rear_frame_num, Mem_every=5, Mem_number=None, mode='test')
+
+            # Save results for quantitative eval ######################
+            test_path = os.path.join(TMP_PATH, seq_name)
+            if not os.path.exists(test_path):
+                os.makedirs(test_path)
+            for f in range(prev_frame_num):
+                img_E = Image.fromarray(pred[0, 0, f].cpu().numpy().astype(np.uint8))
+                img_E.putpalette(palette)
+                img_E = img_E.resize(ori_shape[::-1])
+                img_E.save(os.path.join(test_path, '{}.png'.format(prev_frame_list[f])))
+            for f in range(rear_frame_num):
+                img_E = Image.fromarray(pred_r[0, 0, f].cpu().numpy().astype(np.uint8))
+                img_E.putpalette(palette)
+                img_E = img_E.resize(ori_shape[::-1])
+                img_E.save(os.path.join(test_path, '{}.png'.format(rear_frame_list[f])))
 
 
 @fn_timer
-def mask_inference(data_dir, config, ckpt, out_dir):
+def mask_inference(data_dir, video_frames, config, ckpt, out_dir):
     # build the model from a config file and a checkpoint file
     print('Generating first frame mask...')
     model = init_detector(config, ckpt, device='cuda:0')
 
     # test a single image
-    imgs = []
-    for k, v in VIDEO_FRAMES.items():
-        imgs.append(os.path.join(data_dir, 'JPEGImages/{}/{}.jpg'.format(k, v[0])))
-    print('Total images: {}'.format(imgs))
-    generate_imagesets(data_dir, imgs)
-    for img in imgs:
-        # img = '/workspace/solo/test/00001.jpg'
-        result, cost_time = inference_detector(model, img)
-        result = filter_result(result, max_num=MAX_NUM)
+    videos = video_frames.keys()
+    generate_imagesets(data_dir, videos)
+    for v in videos:
+        frames = video_frames.get(v)
+        imgs = []
+        fi = np.linspace(0, 1, 10) * (len(frames) - 1)
+        fi = fi.astype(np.int)
+        for f in fi:
+            imgs.append(os.path.join(data_dir, 'JPEGImages/{}/{}.jpg'.format(v, frames[f])))
+        results = []
+        for img in imgs:
+            result, cost_time = inference_detector(model, img)
+            result = filter_result(result, max_num=MAX_NUM)
+            if result is not None:
+                results.append(result)
+
+        if len(results) != 0:
+            best_scores = [max(s) for _, _, s in results]
+            best_frame_index = np.argmax(best_scores)
+            result = results[best_frame_index]
+            img = imgs[best_frame_index]
+        else:
+            result = []
+            img = imgs[0]
         save_mask(img, result, MASK_THR, out_dir)
 
 
-def generate_imagesets(data_dir, imgs):
+def generate_imagesets(data_dir, videos):
     print('Generating image set file...')
-    videos = [img.split('/')[-2] for img in imgs]
+    videos = list(videos)
     videos = np.unique(videos)
     with open(os.path.join(data_dir, 'ImageSets/test.txt'), 'w') as f:
         for v in videos:
@@ -222,19 +280,21 @@ def generate_imagesets(data_dir, imgs):
 
 def filter_result(result, index=0, max_num=3):
     assert isinstance(result, list)
-    rr = []
-    for r in result:
-        mask, cate, score = r
-        idxs = cate == index
-        score = score[idxs]
-        mask = mask[idxs, :, :]
-        cate = cate[idxs]
-        if len(score) > max_num:
-            score = score[:max_num]
-            mask = mask[:max_num, :, :]
-            cate = cate[:max_num]
-        rr.append((mask, cate, score))
-    return rr
+    result = result[0]
+    if result is None:
+        return None
+    mask, cate, score = result
+    idxs = cate == index
+    if not np.any(idxs.cpu().numpy()):
+        return None
+    score = score[idxs]
+    mask = mask[idxs, :, :]
+    cate = cate[idxs]
+    if len(score) > max_num:
+        score = score[:max_num]
+        mask = mask[:max_num, :, :]
+        cate = cate[:max_num]
+    return (mask, cate, score)
 
 
 def save_mask(img, result, score_thr, out_dir):
@@ -245,7 +305,7 @@ def save_mask(img, result, score_thr, out_dir):
         os.makedirs(os.path.dirname(save_path))
 
     if result != []:
-        cur_result = result[0]
+        cur_result = result
         seg_label = cur_result[0]
         seg_label = seg_label.cpu().numpy().astype(np.uint8)
         cate_label = cur_result[1]
@@ -332,29 +392,45 @@ def analyse_images(data_root):
 
 
 if __name__ == '__main__':
-    DATA_ROOT = '/workspace/user_data/data'
-    IMG_ROOT = '/tcdata'
-    MODEL_PATH = '/workspace/user_data/model_data/ckpt_196e.pth'
-    SAVE_PATH = '/workspace'
-    TMP_PATH = '/workspace/user_data/tmp_data'
-    MERGE_PATH = '/workspace/user_data/merge_data'
-    MASK_PATH = os.path.join(DATA_ROOT, 'Annotations')
+    mode = 'online'
+    if mode == 'online':
+        DATA_ROOT = '/workspace/user_data/data'
+        IMG_ROOT = '/tcdata'
+        MODEL_PATH = '/workspace/user_data/model_data/ckpt_196e.pth'
+        SAVE_PATH = '/workspace'
+        TMP_PATH = '/workspace/user_data/tmp_data'
+        MERGE_PATH = '/workspace/user_data/merge_data'
+        MASK_PATH = os.path.join(DATA_ROOT, 'Annotations')
+        CONFIG_FILE = r'/workspace/cfg/aug_solov2_r101.py'
+        CKPT_FILE = r'/workspace/user_data/model_data/solov2_9cls.pth'
+        TEMPLATE_MASK = r'/workspace/user_data/template_data/00001.png'
+    else:
+        DATA_ROOT = '/workspace/solo/code/user_data/data'
+        IMG_ROOT = '/workspace/dataset/VOS/test_dataset/JPEGImages/'
+        MODEL_PATH = '/workspace/solo/code/user_data/model_data/ckpt_196e.pth'
+        SAVE_PATH = '/workspace/solo/code/user_data/'
+        TMP_PATH = '/workspace/solo/code/user_data/tmp_data'
+        MERGE_PATH = '/workspace/solo/code/user_data/merge_data'
+        MASK_PATH = os.path.join(DATA_ROOT, 'Annotations')
+        CONFIG_FILE = r'/workspace/solo/code/cfg/aug_solov2_r101.py'
+        CKPT_FILE = r'/workspace/solo/code/user_data/model_data/solov2_9cls.pth'
+        TEMPLATE_MASK = r'/workspace/solo/code/user_data/template_data/00001.png'
+        VIDEO_PATH = '/workspace/solo/code/user_data/video_data'
+
 
     if IMG_ROOT is not None or IMG_ROOT != '':
         process_data_root(DATA_ROOT, IMG_ROOT)
     check_data_root(DATA_ROOT)
-
-    CONFIG_FILE = r'/workspace/cfg/aug_solov2_r101.py'
-    CKPT_FILE = r'/workspace/user_data/model_data/solov2_9cls.pth'
-
-    TEMPLATE_MASK = r'/workspace/user_data/template_data/00001.png'
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
     MASK_THR = 0.2
     MAX_NUM = 4
 
-    mask_inference(DATA_ROOT, CONFIG_FILE, CKPT_FILE, MASK_PATH)
-    main(DATA_ROOT, MODEL_PATH, PALETTE)
+    mask_inference(DATA_ROOT, VIDEO_FRAMES, CONFIG_FILE, CKPT_FILE, MASK_PATH)
+    vos_infer(DATA_ROOT, MODEL_PATH, PALETTE)
     blend_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
     zip_result(MERGE_PATH, SAVE_PATH)
+
+    if mode != 'online':
+        generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
