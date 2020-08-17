@@ -114,9 +114,12 @@ def blend_results(tmp_dir, merge_dir, data_dir):
                 mask.putpalette(palette)
                 mask.save(os.path.join(video_dir, '{}.png'.format(VIDEO_FRAMES[name][t])))
         else:
+            path = os.path.join(tmp_dir, name + '_{}'.format(1),
+                                '{}.png'.format(VIDEO_FRAMES[name][0]))
+            temp_ = np.array(Image.open(path).convert('P'), dtype=np.uint8)
             for t in range(num_frames):
-                mask = np.zeros((h, w), dtype=np.uint8)
-                for j in range(1, len(ins) + 1):
+                mask = np.zeros_like(temp_)
+                for j in list(range(1, len(ins) + 1))[::-1]:
                     path = os.path.join(tmp_dir, name + '_{}'.format(j),
                                         '{}.png'.format(VIDEO_FRAMES[name][t]))
                     temp = np.array(Image.open(path).convert('P'), dtype=np.uint8)
@@ -325,12 +328,13 @@ def save_mask(img, result, score_thr, out_dir):
             img_s.putpalette(PALETTE)
             img_s.save(save_path)
 
-        color_masks = list(range(1, 256))
+        # color_masks = list(range(1, 256))
+        color_mask = 1
         _, h, w = seg_label.shape
         img_show = np.zeros((h, w)).astype(np.uint8)
         for idx in range(num_mask):
             cur_mask = seg_label[idx, :, :]
-            cur_mask = (cur_mask > 0.5).astype(np.uint8)
+            # cur_mask = (cur_mask > 0.5).astype(np.uint8)
             if cur_mask.sum() == 0:
                 print(img)
                 img_ = cv2.imread(img)
@@ -339,9 +343,12 @@ def save_mask(img, result, score_thr, out_dir):
                 img_s = Image.fromarray(img_show)
                 img_s.putpalette(PALETTE)
                 img_s.save(save_path)
-            color_mask = color_masks[idx]
-            cur_mask_bool = cur_mask.astype(np.bool)
+            # color_mask = color_masks[idx]
+            cur_mask_bool = cur_mask.astype(np.bool) & (img_show == 0)
+            if not np.any(cur_mask_bool):
+                continue
             img_show[cur_mask_bool] = color_mask
+            color_mask += 1
 
         img_s = Image.fromarray(img_show)
         img_s.putpalette(PALETTE)
@@ -396,7 +403,7 @@ if __name__ == '__main__':
     if mode == 'online':
         DATA_ROOT = '/workspace/user_data/data'
         IMG_ROOT = '/tcdata'
-        MODEL_PATH = '/workspace/user_data/model_data/ckpt_196e.pth'
+        MODEL_PATH = '/workspace/user_data/model_data/dyy_i14_ckpt_29e.pth'
         SAVE_PATH = '/workspace'
         TMP_PATH = '/workspace/user_data/tmp_data'
         MERGE_PATH = '/workspace/user_data/merge_data'
@@ -407,7 +414,7 @@ if __name__ == '__main__':
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
         IMG_ROOT = '/workspace/dataset/VOS/test_dataset/JPEGImages/'
-        MODEL_PATH = '/workspace/solo/code/user_data/model_data/ckpt_196e.pth'
+        MODEL_PATH = '/workspace/solo/code/user_data/model_data/dyy_i14_ckpt_29e.pth'
         SAVE_PATH = '/workspace/solo/code/user_data/'
         TMP_PATH = '/workspace/solo/code/user_data/tmp_data'
         MERGE_PATH = '/workspace/solo/code/user_data/merge_data'
@@ -420,12 +427,12 @@ if __name__ == '__main__':
 
     if IMG_ROOT is not None or IMG_ROOT != '':
         process_data_root(DATA_ROOT, IMG_ROOT)
-    check_data_root(DATA_ROOT)
+    # check_data_root(DATA_ROOT)
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
-    MASK_THR = 0.2
-    MAX_NUM = 4
+    MASK_THR = 0.3
+    MAX_NUM = 8
 
     mask_inference(DATA_ROOT, VIDEO_FRAMES, CONFIG_FILE, CKPT_FILE, MASK_PATH)
     vos_infer(DATA_ROOT, MODEL_PATH, PALETTE)
