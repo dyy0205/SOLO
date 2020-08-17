@@ -51,6 +51,10 @@ def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None
     else:
         raise NotImplementedError
 
+    seg_result_idx = [i[3] for i in seg_resuls]
+
+    # TODO: stm run video with solo result
+
     b, c, t, h, w = Fs.shape
     Es = torch.zeros((b, 1, t, h, w)).float().cuda()  # [1,1,50,480,864][b,c,t,h,w]
     Es[:, :, 0] = Ms[:, :, 0]
@@ -252,14 +256,31 @@ def mask_inference(video_name):
             fi.append(len(frames) - 1)
             break
 
-    for f in fi:
-        imgs.append(os.path.join(DATA_ROOT, 'JPEGImages/{}/{}.jpg'.format(video_name, frames[f])))
     results = []
-    for img in imgs:
+    for f in fi:
+        img = os.path.join(DATA_ROOT, 'JPEGImages/{}/{}.jpg'.format(video_name, frames[f]))
         result, cost_time = inference_detector(model, img)
-        result = filter_result(result, max_num=MAX_NUM)
+        result = filter_result(result, max_num=MAX_NUM, score_thr=SCORE_THR)
+        result = process_solo_result(result)
+        if result is None:
+            continue
+        result = list(result) + [f]
         results.append(result)
     return results
+
+
+def process_solo_result(result):
+    num = len(result[1])
+    if num == 0:
+        return None
+    result_ = []
+    final = []
+    for i in range(num):
+        result_.append(result[0][i].cpu().numpy())
+    final.append(result_)
+    final.append(list(result[1].cpu().numpy()))
+    final.append(list(result[2].cpu().numpy()))
+    return final
 
 
 def generate_imagesets():
@@ -273,13 +294,13 @@ def generate_imagesets():
             f.write('\n')
 
 
-def filter_result(result, index=0, max_num=3):
+def filter_result(result, index=0, max_num=3, score_thr=0.5):
     assert isinstance(result, list)
     result = result[0]
     if result is None:
         return None
     mask, cate, score = result
-    idxs = cate == index
+    idxs = (cate == index) & (score >=score_thr)
     if not np.any(idxs.cpu().numpy()):
         return None
     score = score[idxs]
@@ -452,7 +473,7 @@ def zip_result(result_dir, save_path):
 
 
 if __name__ == '__main__':
-    mode = 'online'
+    mode = 'offline'
     if mode == 'online':
         DATA_ROOT = '/workspace/user_data/data'
         IMG_ROOT = '/tcdata'
@@ -483,12 +504,11 @@ if __name__ == '__main__':
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
-    MASK_THR = 0.3
+    SCORE_THR = 0.5
     MAX_NUM = 8
 
     generate_imagesets()
-    mask_inference(DATA_ROOT, VIDEO_FRAMES, CONFIG_FILE, CKPT_FILE, MASK_PATH)
-    vos_infer(DATA_ROOT, MODEL_PATH, PALETTE)
+    vos_inference()
     blend_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
     zip_result(MERGE_PATH, SAVE_PATH)
 

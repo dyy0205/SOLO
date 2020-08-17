@@ -20,7 +20,7 @@ class TIANCHI_FUSAI(data.Dataset):
 
     def __init__(self, root, imset='2017/train.txt', target_size=(864, 480), test_aug=False):
         self.root = root
-        self.mask_dir = os.path.join(root, 'Annotations')
+        # self.mask_dir = os.path.join(root, 'Annotations')
         self.image_dir = os.path.join(root, 'JPEGImages')
         self.target_size = target_size
         self.test_aug = test_aug
@@ -38,13 +38,13 @@ class TIANCHI_FUSAI(data.Dataset):
                 _video = line.rstrip('\n')
                 temp_img = os.listdir(os.path.join(self.image_dir, _video))
                 temp_img.sort()
-                _mask = np.array(Image.open(os.path.join(self.mask_dir, _video, temp_img[0])).convert("P"))
+                _img = np.array(Image.open(os.path.join(self.image_dir, _video, temp_img[0])).convert("P"))
 
                 self.videos.append(_video)
                 self.num_frames[_video] = len(glob.glob(os.path.join(self.image_dir, _video, '*.jpg')))
                 self.frame_list[_video] = temp_img
                 # self.num_objects[_video] = np.max(_mask)
-                self.shape[_video] = np.shape(_mask)[:2]
+                self.shape[_video] = np.shape(_img)[:2]
 
     def __len__(self):
         return len(self.videos)
@@ -56,8 +56,7 @@ class TIANCHI_FUSAI(data.Dataset):
         info['num_frames'] = self.num_frames[video]
         info['ori_shape'] = self.shape[video]
 
-        video_true_name, object_label = video.split('_')
-        object_label = int(object_label)
+        video_true_name = video
 
         N_frames = np.empty((self.num_frames[video],) + self.target_size[::-1] + (3,), dtype=np.float32)
         for f in range(self.num_frames[video]):
