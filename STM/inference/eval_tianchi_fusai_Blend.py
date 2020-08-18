@@ -182,7 +182,7 @@ def vos_inference():
     if torch.cuda.is_available():
         print('using Cuda devices, num:', torch.cuda.device_count())
 
-    Testset = TIANCHI_FUSAI(DATA_ROOT, imset='test.txt')
+    Testset = TIANCHI_FUSAI(DATA_ROOT, imset='test.txt', target_size=TARGET_SHAPE)
     print('Total test videos: {}'.format(len(Testset)))
     Testloader = data.DataLoader(Testset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 
@@ -434,7 +434,7 @@ if __name__ == '__main__':
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
         IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
-        MODEL_PATH = '/workspace/solo/code/user_data/model_data/dyy_ckpt_124e.pth'
+        MODEL_PATH = '/workspace/solo/code/user_data/model_data/ckpt_196e.pth'
         SAVE_PATH = '/workspace/solo/code/user_data/'
         TMP_PATH = '/workspace/solo/code/user_data/tmp_data'
         MERGE_PATH = '/workspace/solo/code/user_data/merge_data'
@@ -450,6 +450,7 @@ if __name__ == '__main__':
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
+    TARGET_SHAPE = (600, 1080)
     SCORE_THR = 0.5
     MAX_NUM = 8
     IOU1 = 0.5
