@@ -450,7 +450,7 @@ if __name__ == '__main__':
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
-    TARGET_SHAPE = (600, 1080)
+    TARGET_SHAPE = (608, 1088)
     SCORE_THR = 0.5
     MAX_NUM = 8
     IOU1 = 0.5
