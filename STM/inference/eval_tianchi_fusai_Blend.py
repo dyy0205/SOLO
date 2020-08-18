@@ -53,7 +53,6 @@ def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None
 
     seg_result_idx = [i[3] for i in seg_resuls]
 
-    # TODO: stm run video with solo result
     instance_idx = 1
     b, c, T, h, w = Fs.shape
     results = []
@@ -101,6 +100,9 @@ def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None
             if t in seg_result_idx:
                 idx = seg_result_idx.index(t)
                 masks = seg_resuls[idx][0]
+                # TODO: if there are multiple masks whose iou are larger than thr,
+                #  the rear one will cover the previous.
+                #  The largest iou mask should be kept.
                 for i, mask in enumerate(masks):
                     mask = mask.astype(np.uint8)
                     mask = torch.from_numpy(mask)
