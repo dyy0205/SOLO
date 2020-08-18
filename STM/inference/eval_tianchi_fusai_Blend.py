@@ -44,45 +44,133 @@ def fn_timer(function):
 def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None):
     # print('name:', name)
     # initialize storage tensors
-    if Mem_every:
-        to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
-    elif Mem_number:
-        to_memorize = [int(round(i)) for i in np.linspace(0, num_frames, num=Mem_number + 2)[:-1]]
-    else:
-        raise NotImplementedError
+    # if Mem_every:
+    #     to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
+    # elif Mem_number:
+    #     to_memorize = [int(round(i)) for i in np.linspace(0, num_frames, num=Mem_number + 2)[:-1]]
+    # else:
+    #     raise NotImplementedError
 
     seg_result_idx = [i[3] for i in seg_resuls]
 
     # TODO: stm run video with solo result
+    instance_idx = 1
+    b, c, T, h, w = Fs.shape
+    results = []
 
-    b, c, t, h, w = Fs.shape
-    Es = torch.zeros((b, 1, t, h, w)).float().cuda()  # [1,1,50,480,864][b,c,t,h,w]
-    Es[:, :, 0] = Ms[:, :, 0]
+    if np.all([len(i[0]) == 0 for i in seg_resuls]):
+        print('No segmentation result of solo!')
+        pred = torch.zeros((b, 1, T, h, w)).float().cuda()
+        return [(pred, 1)]
 
-    for t in range(1, num_frames):
-        # memorize
-        pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
-        pre_key = pre_key.unsqueeze(2)
-        pre_value = pre_value.unsqueeze(2)
+    while True:
+        if np.all([len(i[0]) == 0 for i in seg_resuls]):
+            print('Run video over!')
+            break
+        if instance_idx > MAX_NUM:
+            print('Max instance number!')
+            break
+        start_frame_idx = np.argmax([max(i[2]) if i[2] != [] else 0 for i in seg_resuls])
+        start_frame = seg_result_idx[start_frame_idx]
+        start_mask = seg_resuls[start_frame_idx][0][0].astype(np.uint8)
+        # start_mask = cv2.resize(start_mask, (w, h))
+        start_mask = torch.from_numpy(start_mask).cuda()
 
-        if t - 1 == 0:  # the first frame
-            this_keys_m, this_values_m = pre_key, pre_value
-        else:  # other frame
-            this_keys_m = torch.cat([keys, pre_key], dim=2)
-            this_values_m = torch.cat([values, pre_value], dim=2)
+        Es = torch.zeros((b, 1, T, h, w)).float().cuda()
+        Es[:, :, start_frame] = start_mask
+        to_memorize = [int(i) for i in np.arange(start_frame, num_frames, step=Mem_every)]
+        for t in range(start_frame + 1, num_frames):  # frames after
+            # memorize
+            pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
+            pre_key = pre_key.unsqueeze(2)
+            pre_value = pre_value.unsqueeze(2)
 
-        # segment
-        logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m])  # B 2 h w
-        em = F.softmax(logits, dim=1)[:, 1]  # B h w
-        Es[:, 0, t] = em
+            if t - 1 == start_frame:  # the first frame
+                this_keys_m, this_values_m = pre_key, pre_value
+            else:  # other frame
+                this_keys_m = torch.cat([keys, pre_key], dim=2)
+                this_values_m = torch.cat([values, pre_value], dim=2)
 
-        # update key and value
-        if t - 1 in to_memorize:
-            keys, values = this_keys_m, this_values_m
+            # segment
+            logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1].detach()])  # B 2 h w
+            em = F.softmax(logits, dim=1)[:, 1]  # B h w
+            Es[:, 0, t] = em
 
-    pred = torch.round(Es.float())
+            # check solo result
+            pred = torch.round(em.float())
+            if t in seg_result_idx:
+                idx = seg_result_idx.index(t)
+                masks = seg_resuls[idx][0]
+                for i, mask in enumerate(masks):
+                    mask = mask.astype(np.uint8)
+                    mask = torch.from_numpy(mask)
+                    iou = get_video_mIoU(pred, mask)
+                    if iou >= IOU1:
+                        # same instance
+                        Es[:, 0, t] = mask
+                        # drop i in seg result
+                        for j in range(3):
+                            seg_resuls[idx][j].pop(i)
+                    elif iou >= IOU2:
+                        # drop i in seg result
+                        for j in range(3):
+                            seg_resuls[idx][j].pop(i)
 
-    return pred, Es
+            # update key and value
+            if t - 1 in to_memorize:
+                keys, values = this_keys_m, this_values_m
+
+        to_memorize = [start_frame - int(i) for i in np.arange(0, start_frame + 1, step=Mem_every)]
+        for t in list(range(0, start_frame))[::-1]:  # frames before
+            # memorize
+            pre_key, pre_value = model([Fs[:, :, t + 1], Es[:, :, t + 1]])
+            pre_key = pre_key.unsqueeze(2)
+            pre_value = pre_value.unsqueeze(2)
+
+            if t + 1 == start_frame:  # the first frame
+                this_keys_m, this_values_m = pre_key, pre_value
+            else:  # other frame
+                this_keys_m = torch.cat([keys, pre_key], dim=2)
+                this_values_m = torch.cat([values, pre_value], dim=2)
+
+            # segment
+            logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t + 1].detach()])  # B 2 h w
+            em = F.softmax(logits, dim=1)[:, 1]  # B h w
+            Es[:, 0, t] = em
+
+            # check solo result
+            pred = torch.round(em.float())
+            if t in seg_result_idx:
+                idx = seg_result_idx.index(t)
+                masks = seg_resuls[idx][0]
+                for i, mask in enumerate(masks):
+                    mask = mask.astype(np.uint8)
+                    mask = torch.from_numpy(mask)
+                    iou = get_video_mIoU(pred, mask)
+                    if iou >= IOU1:
+                        # same instance
+                        Es[:, 0, t] = mask
+                        # drop i in seg result
+                        for j in range(3):
+                            seg_resuls[idx][j].pop(i)
+                    elif iou >= IOU2:
+                        # drop i in seg result
+                        for j in range(3):
+                            seg_resuls[idx][j].pop(i)
+
+            # update key and value
+            if t + 1 in to_memorize:
+                keys, values = this_keys_m, this_values_m
+
+        for j in range(3):
+            seg_resuls[start_frame_idx][j].pop(0)
+
+        pred = torch.round(Es.float())
+        results.append((pred, instance_idx))
+
+        instance_idx += 1
+
+    return results
 
 
 @fn_timer
@@ -119,133 +207,54 @@ def vos_inference():
         Fs, info = V
         seq_name = info['name'][0]
         ori_shape = info['ori_shape']
+        target_shape = info['target_shape']
+        target_shape = (target_shape[0].cpu().numpy()[0], target_shape[1].cpu().numpy()[0])
         num_frames = info['num_frames'][0].item()
         if '_' in seq_name:
             video_name = seq_name.split('_')[0]
         else:
             video_name = seq_name
-        seg_results = mask_inference(video_name)
+        seg_results = mask_inference(video_name, target_shape)
 
         frame_list = VIDEO_FRAMES[video_name]
 
         print('[{}]: num_frames: {}'.format(seq_name, num_frames))
 
-        pred, Es = Run_video(model, Fs, seg_results, num_frames, Mem_every=5)
+        results = Run_video(model, Fs, seg_results, num_frames, Mem_every=5)
 
         # Save results for quantitative eval ######################
-        test_path = os.path.join(TMP_PATH, seq_name)
-        if not os.path.exists(test_path):
-            os.makedirs(test_path)
-        for f in range(num_frames):
-            img_E = Image.fromarray(pred[0, 0, f].cpu().numpy().astype(np.uint8))
-            img_E.putpalette(PALETTE)
-            img_E = img_E.resize(ori_shape[::-1])
-            img_E.save(os.path.join(test_path, '{}.png'.format(frame_list[f])))
+
+        for result in results:
+            pred, instance = result
+            test_path = os.path.join(TMP_PATH, seq_name + '_{}'.format(instance))
+            if not os.path.exists(test_path):
+                os.makedirs(test_path)
+
+            for f in range(num_frames):
+                img_E = Image.fromarray(pred[0, 0, f].cpu().numpy().astype(np.uint8))
+                img_E.putpalette(PALETTE)
+                img_E = img_E.resize(ori_shape[::-1])
+                img_E.save(os.path.join(test_path, '{}.png'.format(frame_list[f])))
 
 
-# @fn_timer
-# def vos_infer(data_root, model_path, palette):
-#     # Model and version
-#     MODEL = 'STM'
-#     print(MODEL, ': Testing on TIANCHI...')
-#
-#     if torch.cuda.is_available():
-#         print('using Cuda devices, num:', torch.cuda.device_count())
-#
-#     Testset = TIANCHI(data_root, imset='test.txt', single_object=True)
-#     print('Total test videos: {}'.format(len(Testset)))
-#     Testloader = data.DataLoader(Testset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
-#
-#     model = nn.DataParallel(STM())
-#     if torch.cuda.is_available():
-#         model.cuda()
-#     model.eval()  # turn-off BN
-#
-#     print('Loading weights:', model_path)
-#     model_ = torch.load(model_path)
-#     if 'state_dict' in model_.keys():
-#         state_dict = model_['state_dict']
-#     else:
-#         state_dict = model_
-#     model.load_state_dict(state_dict)
-#
-#     code_name = 'tianchi'
-#     # date = datetime.datetime.strftime(datetime.datetime.now(), '%y%m%d%H%M')
-#     print('Start Testing:', code_name)
-#
-#     for seq, V in enumerate(Testloader):
-#         if len(V) == 3:
-#             Fs, Ms, info = V
-#             seq_name = info['name'][0]
-#             ori_shape = info['ori_shape']
-#             num_frames = info['num_frames'][0].item()
-#             mode = info['mode']
-#             if '_' in seq_name:
-#                 video_name = seq_name.split('_')[0]
-#             if mode == 0:
-#                 frame_list = VIDEO_FRAMES[video_name]
-#             else:
-#                 frame_list = VIDEO_FRAMES[video_name][::-1]
-#
-#             print('[{}]: num_frames: {}'.format(seq_name, num_frames))
-#
-#             pred, Es = Run_video(model, Fs, Ms, num_frames, Mem_every=5, Mem_number=None, mode='test')
-#
-#             # Save results for quantitative eval ######################
-#             test_path = os.path.join(TMP_PATH, seq_name)
-#             if not os.path.exists(test_path):
-#                 os.makedirs(test_path)
-#             for f in range(num_frames):
-#                 img_E = Image.fromarray(pred[0, 0, f].cpu().numpy().astype(np.uint8))
-#                 img_E.putpalette(palette)
-#                 img_E = img_E.resize(ori_shape[::-1])
-#                 img_E.save(os.path.join(test_path, '{}.png'.format(frame_list[f])))
-#
-#         elif len(V) == 4:
-#             print('Start at middle frame!')
-#             Fs_p, Fs_r, Ms, info = V
-#             seq_name = info['name'][0]
-#             ori_shape = info['ori_shape']
-#             num_frames = info['num_frames'][0].item()
-#             start_index = info['start_index']
-#             if '_' in seq_name:
-#                 video_name = seq_name.split('_')[0]
-#
-#             _, _, prev_frame_num, _, _ = Fs_p.shape
-#             _, _, rear_frame_num, _, _ = Fs_r.shape
-#             prev_frame_list = VIDEO_FRAMES[video_name][:start_index + 1][::-1]
-#             rear_frame_list = VIDEO_FRAMES[video_name][start_index:]
-#
-#             print('[{}]: num_frames: {}'.format(seq_name, num_frames))
-#
-#             pred, Es = Run_video(model, Fs_p, Ms, prev_frame_num, Mem_every=5, Mem_number=None, mode='test')
-#             pred_r, Es_r = Run_video(model, Fs_r, Ms, rear_frame_num, Mem_every=5, Mem_number=None, mode='test')
-#
-#             # Save results for quantitative eval ######################
-#             test_path = os.path.join(TMP_PATH, seq_name)
-#             if not os.path.exists(test_path):
-#                 os.makedirs(test_path)
-#             for f in range(prev_frame_num):
-#                 img_E = Image.fromarray(pred[0, 0, f].cpu().numpy().astype(np.uint8))
-#                 img_E.putpalette(palette)
-#                 img_E = img_E.resize(ori_shape[::-1])
-#                 img_E.save(os.path.join(test_path, '{}.png'.format(prev_frame_list[f])))
-#             for f in range(rear_frame_num):
-#                 img_E = Image.fromarray(pred_r[0, 0, f].cpu().numpy().astype(np.uint8))
-#                 img_E.putpalette(palette)
-#                 img_E = img_E.resize(ori_shape[::-1])
-#                 img_E.save(os.path.join(test_path, '{}.png'.format(rear_frame_list[f])))
+def get_video_mIoU(predn, all_Mn):  # [c,t,h,w]
+    pred = predn.squeeze().cpu().data.numpy()
+    # np.save('blackswan.npy', pred)
+    gt = all_Mn.squeeze().cpu().data.numpy()  # [t,h,w]
+    agg = pred + gt
+    i = float(np.sum(agg == 2))
+    u = float(np.sum(agg > 0))
+    return i / (u + 1e-6)
 
 
 @fn_timer
-def mask_inference(video_name):
+def mask_inference(video_name, mask_shape):
     # build the model from a config file and a checkpoint file
     print('Generating frame mask...')
     model = init_detector(CONFIG_FILE, CKPT_FILE, device='cuda:0')
 
     # test a single image
     frames = VIDEO_FRAMES.get(video_name)
-    imgs = []
     fi = []
     i = 0
     interval = 5
@@ -261,22 +270,22 @@ def mask_inference(video_name):
         img = os.path.join(DATA_ROOT, 'JPEGImages/{}/{}.jpg'.format(video_name, frames[f]))
         result, cost_time = inference_detector(model, img)
         result = filter_result(result, max_num=MAX_NUM, score_thr=SCORE_THR)
-        result = process_solo_result(result)
         if result is None:
             continue
+        result = process_solo_result(result, mask_shape)
         result = list(result) + [f]
         results.append(result)
     return results
 
 
-def process_solo_result(result):
+def process_solo_result(result, mask_shape):
     num = len(result[1])
-    if num == 0:
-        return None
     result_ = []
     final = []
     for i in range(num):
-        result_.append(result[0][i].cpu().numpy())
+        mask = result[0][i].cpu().numpy().astype(np.uint8)
+        mask = cv2.resize(mask, mask_shape)
+        result_.append(mask)
     final.append(result_)
     final.append(list(result[1].cpu().numpy()))
     final.append(list(result[2].cpu().numpy()))
@@ -300,7 +309,7 @@ def filter_result(result, index=0, max_num=3, score_thr=0.5):
     if result is None:
         return None
     mask, cate, score = result
-    idxs = (cate == index) & (score >=score_thr)
+    idxs = (cate == index) & (score >= score_thr)
     if not np.any(idxs.cpu().numpy()):
         return None
     score = score[idxs]
@@ -311,69 +320,6 @@ def filter_result(result, index=0, max_num=3, score_thr=0.5):
         mask = mask[:max_num, :, :]
         cate = cate[:max_num]
     return (mask, cate, score)
-
-
-# def save_mask(img, result, score_thr, out_dir):
-#     img_name = img.split('/')[-1]
-#     video_name = img.split('/')[-2]
-#     save_path = os.path.join(out_dir, video_name, img_name.replace('jpg', 'png'))
-#     if not os.path.exists(os.path.dirname(save_path)):
-#         os.makedirs(os.path.dirname(save_path))
-#
-#     if result != []:
-#         cur_result = result
-#         seg_label = cur_result[0]
-#         seg_label = seg_label.cpu().numpy().astype(np.uint8)
-#         cate_label = cur_result[1]
-#         cate_label = cate_label.cpu().numpy()
-#         score = cur_result[2].cpu().numpy()
-#
-#         vis_inds = score >= score_thr
-#         seg_label = seg_label[vis_inds]
-#         num_mask = seg_label.shape[0]
-#
-#         if num_mask == 0:
-#             print(img)
-#             img_ = cv2.imread(img)
-#             h, w, c = img_.shape
-#             img_show = np.zeros((h, w)).astype(np.uint8)
-#             img_s = Image.fromarray(img_show)
-#             img_s.putpalette(PALETTE)
-#             img_s.save(save_path)
-#
-#         # color_masks = list(range(1, 256))
-#         color_mask = 1
-#         _, h, w = seg_label.shape
-#         img_show = np.zeros((h, w)).astype(np.uint8)
-#         for idx in range(num_mask):
-#             cur_mask = seg_label[idx, :, :]
-#             # cur_mask = (cur_mask > 0.5).astype(np.uint8)
-#             if cur_mask.sum() == 0:
-#                 print(img)
-#                 img_ = cv2.imread(img)
-#                 h, w, c = img_.shape
-#                 img_show = np.zeros((h, w)).astype(np.uint8)
-#                 img_s = Image.fromarray(img_show)
-#                 img_s.putpalette(PALETTE)
-#                 img_s.save(save_path)
-#             # color_mask = color_masks[idx]
-#             cur_mask_bool = cur_mask.astype(np.bool) & (img_show == 0)
-#             if not np.any(cur_mask_bool):
-#                 continue
-#             img_show[cur_mask_bool] = color_mask
-#             color_mask += 1
-#
-#         img_s = Image.fromarray(img_show)
-#         img_s.putpalette(PALETTE)
-#         img_s.save(save_path)
-#     else:
-#         print(img)
-#         img_ = cv2.imread(img)
-#         h, w, c = img_.shape
-#         img_show = np.zeros((h, w)).astype(np.uint8)
-#         img_s = Image.fromarray(img_show)
-#         img_s.putpalette(PALETTE)
-#         img_s.save(save_path)
 
 
 def process_data_root(data_root, img_root):
@@ -477,7 +423,7 @@ if __name__ == '__main__':
     if mode == 'online':
         DATA_ROOT = '/workspace/user_data/data'
         IMG_ROOT = '/tcdata'
-        MODEL_PATH = '/workspace/user_data/model_data/dyy_i14_ckpt_29e.pth'
+        MODEL_PATH = '/workspace/user_data/model_data/dyy_ckpt_124e.pth'
         SAVE_PATH = '/workspace'
         TMP_PATH = '/workspace/user_data/tmp_data'
         MERGE_PATH = '/workspace/user_data/merge_data'
@@ -487,8 +433,8 @@ if __name__ == '__main__':
         TEMPLATE_MASK = r'/workspace/user_data/template_data/00001.png'
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
-        IMG_ROOT = '/workspace/dataset/VOS/test_dataset/JPEGImages/'
-        MODEL_PATH = '/workspace/solo/code/user_data/model_data/dyy_i14_ckpt_29e.pth'
+        IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
+        MODEL_PATH = '/workspace/solo/code/user_data/model_data/dyy_ckpt_124e.pth'
         SAVE_PATH = '/workspace/solo/code/user_data/'
         TMP_PATH = '/workspace/solo/code/user_data/tmp_data'
         MERGE_PATH = '/workspace/solo/code/user_data/merge_data'
@@ -506,6 +452,8 @@ if __name__ == '__main__':
 
     SCORE_THR = 0.5
     MAX_NUM = 8
+    IOU1 = 0.5
+    IOU2 = 0.1
 
     generate_imagesets()
     vos_inference()

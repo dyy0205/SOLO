@@ -55,6 +55,7 @@ class TIANCHI_FUSAI(data.Dataset):
         info['name'] = video
         info['num_frames'] = self.num_frames[video]
         info['ori_shape'] = self.shape[video]
+        info['target_shape'] = self.target_size
 
         video_true_name = video
 
