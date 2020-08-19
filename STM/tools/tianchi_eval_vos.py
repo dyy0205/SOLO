@@ -1,8 +1,76 @@
 import os, glob, csv
 import numpy as np
 from PIL import Image
+import time
 
-# TODO: modify to calculate vos miou. Match instances -> mean iou.
+
+def calculate_videos_miou(pred_dir, ann_dir):
+    preds = os.listdir(pred_dir)
+    anns = os.listdir(ann_dir)
+    ious = []
+    for pred in preds:
+        if pred not in anns:
+            print('{} have no groundtruth!'.format(pred))
+        else:
+            st = time.time()
+            iou = get_video_miou(os.path.join(pred_dir, pred), os.path.join(ann_dir, pred))
+            ed = time.time()
+            print('video: {}, cost time: {:.2f}s'.format(pred, ed - st))
+            ious.append(iou)
+    miou = np.mean(ious)
+    num_cal = len(ious)
+    return miou, num_cal
+
+
+def get_video_miou(video_dir, gt_dir):
+    assert os.listdir(video_dir) == os.listdir(gt_dir)
+    pred_labels = set([])
+    gt_labels = set([])
+    iou_d = {}
+    for f in os.listdir(video_dir):
+        pred = os.path.join(video_dir, f)
+        ann = os.path.join(gt_dir, f)
+        pred_img = np.array(Image.open(pred).convert('P')).astype(np.uint8)
+        ann_img = np.array(Image.open(ann).convert('P')).astype(np.uint8)
+        pl = np.unique(pred_img)
+        gl = np.unique(ann_img)
+        pred_labels = pred_labels | set(pl)
+        gt_labels = gt_labels | set(gl)
+
+        for g in gl:
+            for p in pl:
+                if g == 0 or p == 0:
+                    continue
+                iou_d.setdefault(g, {})
+                iou_d[g].setdefault(p, [])
+                iou = IOU(ann_img == g, pred_img == p)
+                iou_d[g][p].append(iou)
+
+    pred_labels = list(pred_labels)
+    pred_labels.remove(0)
+    gt_labels = list(gt_labels)
+    gt_labels.remove(0)
+    for g in gt_labels:
+        for p in pred_labels:
+            try:
+                iou_d[g][p] = np.mean(iou_d[g][p])
+            except Exception as e:
+                pass
+
+    checked = []
+    result = []
+    for g in gt_labels:
+        for c in checked:
+            if c in iou_d[g].keys():
+                iou_d[g].pop(c)
+        best_iou = max(iou_d.get(g).values())
+        for k, v in iou_d[g].items():
+            if v == best_iou:
+                checked.append(k)
+        result.append(best_iou)
+
+    return np.mean(result)
+
 
 def IOU(gt, pred, eps=1e-5):
     intersect = np.sum(np.logical_and(gt > 0, pred > 0)) + eps
@@ -11,52 +79,8 @@ def IOU(gt, pred, eps=1e-5):
     return iou
 
 
-def AvgIOU(gt_mask, pred_mask, thresh=0.5):
-    gts = np.unique(gt_mask)[1:]
-    n_gt = len(gts)
-    preds = np.unique(pred_mask)[1:]
-    n_pred = len(preds)
-    n_tp = 0
-    iou_total = 0.
-    for i in gts:
-        gt = (gt_mask == i)
-        ioui = 0.
-        for j in preds:
-            pred = (pred_mask == j)
-            iouij = IOU(gt, pred)
-            ioui = max(ioui, iouij)
-        if ioui > thresh:
-            n_tp += 1
-        iou_total += ioui
-    n_fp = n_pred - n_tp
-    n_fn = n_gt - n_tp
-    iou_avg = iou_total / n_gt
-    recall = n_tp / (n_tp + n_fn)
-    precision = n_tp / (n_tp + n_fp)
-    return iou_avg, recall, precision
-
-
-root = '/versa/dyy/dataset/TIANCHI'
-anns = sorted(glob.glob(os.path.join(root, 'val_total/Annotations/*/*.png')))
-pred_dir = os.path.join(root, 'v3_out')
-
-metric = []
-for i, ann in enumerate(anns):
-    name = ann.split('/')[-1]
-    video_id = ann.split('/')[-2]
-    whole_name = video_id + '_' + name
-    print(i, whole_name)
-    gt_mask = np.array(Image.open(ann).convert('P'))
-    try:
-        pred_mask = np.array(Image.open(os.path.join(pred_dir, video_id, name)).convert('P'))
-        iou_avg, recall, precision = AvgIOU(gt_mask, pred_mask, thresh=0.5)
-        metric.append([whole_name, iou_avg, recall, precision])
-    except:
-        print('============ has no preds!!')
-        metric.append([whole_name, 0., 0., 0.])
-
-with open(os.path.join(root, 'v3_out.csv'), 'w') as f:
-    writer = csv.writer(f)
-    writer.writerow(['FileName', 'MIOU', 'Recall', 'Precision'])
-    writer.writerows(metric)
-
+if __name__ == '__main__':
+    pred_dir = '/workspace/solo/code/user_data/merge_data'
+    ann_dir = r'/workspace/dataset/VOS/fusai_train/Annotations/'
+    result, num = calculate_videos_miou(pred_dir, ann_dir)
+    print(result, num)

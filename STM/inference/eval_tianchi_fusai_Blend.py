@@ -26,6 +26,7 @@ from STM.dataset import TIANCHI
 from STM.tools.generate_videos import generate_videos
 from STM.dataloader.fusai_dataset import TIANCHI_FUSAI
 from STM.tools.process_dir import process_tianchi_dir
+from STM.tools.tianchi_eval_vos import calculate_videos_miou
 
 torch.set_grad_enabled(False)  # Volatile
 
@@ -95,7 +96,7 @@ def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None
                 this_frame_results = seg_resuls[idx]
                 masks = this_frame_results[0]
                 ious = []
-                for mask in masks:
+                for   mask in masks:
                     mask = mask.astype(np.uint8)
                     mask = torch.from_numpy(mask)
                     iou = get_video_mIoU(pred, mask)
@@ -525,7 +526,7 @@ def save_mask(img, result, score_thr, out_dir):
 
 
 if __name__ == '__main__':
-    mode = 'online'
+    mode = 'offline'
     if mode == 'online':
         DATA_ROOT = '/workspace/user_data/data'
         IMG_ROOT = '/tcdata'
@@ -549,6 +550,7 @@ if __name__ == '__main__':
         CKPT_FILE = r'/workspace/solo/code/user_data/model_data/solov2_9cls.pth'
         TEMPLATE_MASK = r'/workspace/solo/code/user_data/template_data/00001.png'
         VIDEO_PATH = '/workspace/solo/code/user_data/video_data'
+        GT_PATH = r'/workspace/dataset/VOS/fusai_train/Annotations/'
 
         process_tianchi_dir(SAVE_PATH)
 
@@ -559,11 +561,11 @@ if __name__ == '__main__':
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
     TARGET_SHAPE = (1008, 560)
-    SCORE_THR = 0.6
+    SCORE_THR = 0.8
     SOLO_INTERVAL = 5
     MAX_NUM = 8
-    IOU1 = 0.6
-    IOU2 = 0.3
+    IOU1 = 0.5
+    IOU2 = 0.1
 
     generate_imagesets()
     vos_inference()
@@ -572,3 +574,5 @@ if __name__ == '__main__':
 
     if mode != 'online':
         generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
+        miou, num = calculate_videos_miou(MERGE_PATH, GT_PATH)
+        print('offline evaluation miou: {}, {} videos counted'.format(miou, num))
