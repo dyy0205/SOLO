@@ -25,6 +25,7 @@ from STM.models.model_fusai import STM
 from STM.dataset import TIANCHI
 from STM.tools.generate_videos import generate_videos
 from STM.dataloader.fusai_dataset import TIANCHI_FUSAI
+from STM.tools.process_dir import process_tianchi_dir
 
 torch.set_grad_enabled(False)  # Volatile
 
@@ -42,14 +43,6 @@ def fn_timer(function):
 
 
 def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None):
-    # print('name:', name)
-    # initialize storage tensors
-    # if Mem_every:
-    #     to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
-    # elif Mem_number:
-    #     to_memorize = [int(round(i)) for i in np.linspace(0, num_frames, num=Mem_number + 2)[:-1]]
-    # else:
-    #     raise NotImplementedError
 
     seg_result_idx = [i[3] for i in seg_resuls]
 
@@ -99,24 +92,31 @@ def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None
             pred = torch.round(em.float())
             if t in seg_result_idx:
                 idx = seg_result_idx.index(t)
-                masks = seg_resuls[idx][0]
-                # TODO: if there are multiple masks whose iou are larger than thr,
-                #  the rear one will cover the previous.
-                #  The largest iou mask should be kept.
-                for i, mask in enumerate(masks):
+                this_frame_results = seg_resuls[idx]
+                masks = this_frame_results[0]
+                ious = []
+                for mask in masks:
                     mask = mask.astype(np.uint8)
                     mask = torch.from_numpy(mask)
                     iou = get_video_mIoU(pred, mask)
-                    if iou >= IOU1:
-                        # same instance
-                        Es[:, 0, t] = mask
-                        # drop i in seg result
-                        for j in range(3):
-                            seg_resuls[idx][j].pop(i)
-                    elif iou >= IOU2:
-                        # drop i in seg result
-                        for j in range(3):
-                            seg_resuls[idx][j].pop(i)
+                    ious.append(iou)
+                if ious != []:
+                    ious = np.array(ious)
+                    reserve = list(range(len(ious)))
+                    if sum(ious >= IOU1) >= 1:
+                        same_idx = np.argmax(ious)
+                        Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
+                        reserve.remove(same_idx)
+
+                    for i, iou in enumerate(ious):
+                        if iou >= IOU2 and iou < IOU1:
+                            reserve.remove(i)
+
+                    reserve_result = []
+                    for n in range(3):
+                        reserve_result.append([this_frame_results[n][i] for i in reserve])
+                    reserve_result.append(this_frame_results[3])
+                    seg_resuls[idx] = reserve_result
 
             # update key and value
             if t - 1 in to_memorize:
@@ -144,21 +144,31 @@ def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None
             pred = torch.round(em.float())
             if t in seg_result_idx:
                 idx = seg_result_idx.index(t)
-                masks = seg_resuls[idx][0]
-                for i, mask in enumerate(masks):
+                this_frame_results = seg_resuls[idx]
+                masks = this_frame_results[0]
+                ious = []
+                for mask in masks:
                     mask = mask.astype(np.uint8)
                     mask = torch.from_numpy(mask)
                     iou = get_video_mIoU(pred, mask)
-                    if iou >= IOU1:
-                        # same instance
-                        Es[:, 0, t] = mask
-                        # drop i in seg result
-                        for j in range(3):
-                            seg_resuls[idx][j].pop(i)
-                    elif iou >= IOU2:
-                        # drop i in seg result
-                        for j in range(3):
-                            seg_resuls[idx][j].pop(i)
+                    ious.append(iou)
+                if ious != []:
+                    ious = np.array(ious)
+                    reserve = list(range(len(ious)))
+                    if sum(ious >= IOU1) >= 1:
+                        same_idx = np.argmax(ious)
+                        Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
+                        reserve.remove(same_idx)
+
+                    for i, iou in enumerate(ious):
+                        if iou >= IOU2 and iou < IOU1:
+                            reserve.remove(i)
+
+                    reserve_result = []
+                    for n in range(3):
+                        reserve_result.append([this_frame_results[n][i] for i in reserve])
+                    reserve_result.append(this_frame_results[3])
+                    seg_resuls[idx] = reserve_result
 
             # update key and value
             if t + 1 in to_memorize:
@@ -224,8 +234,6 @@ def vos_inference():
 
         results = Run_video(model, Fs, seg_results, num_frames, Mem_every=5)
 
-        # Save results for quantitative eval ######################
-
         for result in results:
             pred, instance = result
             test_path = os.path.join(TMP_PATH, seq_name + '_{}'.format(instance))
@@ -259,11 +267,11 @@ def mask_inference(video_name, mask_shape):
     frames = VIDEO_FRAMES.get(video_name)
     fi = []
     i = 0
-    interval = 5
+    interval = SOLO_INTERVAL
     while True:
         fi.append(i)
         i += interval
-        if i >= len(frames) - 5:
+        if i >= len(frames) - 1:
             fi.append(len(frames) - 1)
             break
 
@@ -271,12 +279,21 @@ def mask_inference(video_name, mask_shape):
     for f in fi:
         img = os.path.join(DATA_ROOT, 'JPEGImages/{}/{}.jpg'.format(video_name, frames[f]))
         result, cost_time = inference_detector(model, img)
-        result = filter_result(result, max_num=MAX_NUM, score_thr=SCORE_THR)
+        result = filter_result(result, max_num=MAX_NUM)
         if result is None:
             continue
         result = process_solo_result(result, mask_shape)
         result = list(result) + [f]
         results.append(result)
+
+    results = filter_score(results)
+
+    # visualize solo mask
+    for result in results:
+        mask_result = result[:3]
+        frame = result[3]
+        img = os.path.join(DATA_ROOT, 'JPEGImages/{}/{}.jpg'.format(video_name, frames[frame]))
+        save_mask(img, mask_result, 0, MASK_PATH)
     return results
 
 
@@ -288,10 +305,10 @@ def process_solo_result(result, mask_shape):
         mask = result[0][i].cpu().numpy().astype(np.uint8)
         mask = cv2.resize(mask, mask_shape)
         result_.append(mask)
-    final.append(result_)
-    final.append(list(result[1].cpu().numpy()))
-    final.append(list(result[2].cpu().numpy()))
-    return final
+    final.append(np.array(result_))
+    final.append(result[1].cpu().numpy())
+    final.append(result[2].cpu().numpy())
+    return final # [array, array, array]
 
 
 def generate_imagesets():
@@ -305,13 +322,37 @@ def generate_imagesets():
             f.write('\n')
 
 
-def filter_result(result, index=0, max_num=3, score_thr=0.5):
+def filter_score(results): # list(array, array, array, int)
+    filtered = []
+    num = 0
+    for result in results:
+        idx = result[2] >= SCORE_THR
+        num += np.sum(idx)
+        if np.any(idx):
+            filtered.append([list(result[i][idx]) for i in range(3)] + [result[3]])
+
+    if num == 0:
+        filtered = []
+        # no mask score larger than threshold
+        scores = np.array([result[2] for result in results])
+        scores = np.concatenate(scores)
+        score_thr = np.max(scores) * 0.8
+        for result in results:
+            idx = result[2] >= score_thr
+            if np.any(idx):
+                filtered.append([list(result[i][idx]) for i in range(3)] + [result[3]])
+
+    return filtered
+
+
+def filter_result(result, index=0, max_num=8):
+    # TODO: if all frame score smaller than score_thr, max score frame should be reserved.
     assert isinstance(result, list)
     result = result[0]
     if result is None:
         return None
     mask, cate, score = result
-    idxs = (cate == index) & (score >= score_thr)
+    idxs = (cate == index)
     if not np.any(idxs.cpu().numpy()):
         return None
     score = score[idxs]
@@ -420,8 +461,71 @@ def zip_result(result_dir, save_path):
     f.close()
 
 
+def save_mask(img, result, score_thr, out_dir):
+    img_name = img.split('/')[-1]
+    video_name = img.split('/')[-2]
+    save_path = os.path.join(out_dir, video_name, img_name.replace('jpg', 'png'))
+    if not os.path.exists(os.path.dirname(save_path)):
+        os.makedirs(os.path.dirname(save_path))
+
+    if result != []:
+        cur_result = result
+        seg_label = np.array(cur_result[0])
+        # seg_label = seg_label.cpu().numpy().astype(np.uint8)
+        cate_label = np.array(cur_result[1])
+        # cate_label = cate_label.cpu().numpy()
+        score = np.array(cur_result[2])
+
+        vis_inds = score >= score_thr
+        seg_label = seg_label[vis_inds]
+        num_mask = seg_label.shape[0]
+
+        if num_mask == 0:
+            print(img)
+            img_ = cv2.imread(img)
+            h, w, c = img_.shape
+            img_show = np.zeros((h, w)).astype(np.uint8)
+            img_s = Image.fromarray(img_show)
+            img_s.putpalette(PALETTE)
+            img_s.save(save_path)
+
+        # color_masks = list(range(1, 256))
+        color_mask = 1
+        _, h, w = seg_label.shape
+        img_show = np.zeros((h, w)).astype(np.uint8)
+        for idx in range(num_mask):
+            cur_mask = seg_label[idx, :, :]
+            # cur_mask = (cur_mask > 0.5).astype(np.uint8)
+            if cur_mask.sum() == 0:
+                print(img)
+                img_ = cv2.imread(img)
+                h, w, c = img_.shape
+                img_show = np.zeros((h, w)).astype(np.uint8)
+                img_s = Image.fromarray(img_show)
+                img_s.putpalette(PALETTE)
+                img_s.save(save_path)
+            # color_mask = color_masks[idx]
+            cur_mask_bool = cur_mask.astype(np.bool) & (img_show == 0)
+            if not np.any(cur_mask_bool):
+                continue
+            img_show[cur_mask_bool] = color_mask
+            color_mask += 1
+
+        img_s = Image.fromarray(img_show)
+        img_s.putpalette(PALETTE)
+        img_s.save(save_path)
+    else:
+        print(img)
+        img_ = cv2.imread(img)
+        h, w, c = img_.shape
+        img_show = np.zeros((h, w)).astype(np.uint8)
+        img_s = Image.fromarray(img_show)
+        img_s.putpalette(PALETTE)
+        img_s.save(save_path)
+
+
 if __name__ == '__main__':
-    mode = 'offline'
+    mode = 'online'
     if mode == 'online':
         DATA_ROOT = '/workspace/user_data/data'
         IMG_ROOT = '/tcdata'
@@ -436,7 +540,7 @@ if __name__ == '__main__':
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
         IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
-        MODEL_PATH = '/workspace/solo/code/user_data/model_data/ckpt_196e.pth'
+        MODEL_PATH = '/workspace/solo/code/user_data/model_data/dyy_ckpt_124e.pth'
         SAVE_PATH = '/workspace/solo/code/user_data/'
         TMP_PATH = '/workspace/solo/code/user_data/tmp_data'
         MERGE_PATH = '/workspace/solo/code/user_data/merge_data'
@@ -446,17 +550,20 @@ if __name__ == '__main__':
         TEMPLATE_MASK = r'/workspace/solo/code/user_data/template_data/00001.png'
         VIDEO_PATH = '/workspace/solo/code/user_data/video_data'
 
+        process_tianchi_dir(SAVE_PATH)
+
     if IMG_ROOT is not None or IMG_ROOT != '':
         process_data_root(DATA_ROOT, IMG_ROOT)
     # check_data_root(DATA_ROOT)
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
-    TARGET_SHAPE = (608, 1088)
-    SCORE_THR = 0.5
+    TARGET_SHAPE = (1008, 560)
+    SCORE_THR = 0.6
+    SOLO_INTERVAL = 5
     MAX_NUM = 8
-    IOU1 = 0.5
-    IOU2 = 0.1
+    IOU1 = 0.6
+    IOU2 = 0.3
 
     generate_imagesets()
     vos_inference()
