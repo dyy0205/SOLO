@@ -70,13 +70,14 @@ class TIANCHI(data.Dataset):
     '''
 
     def __init__(self, root, phase='train', imset='2016/val.txt', separate_instance=False, only_single=False,
-                 target_size=(864, 480), clip_size=3, only_multiple=False, mode='sample', interval=1,
+                 target_size=(864, 480), crop_size=(384, 384), clip_size=3, only_multiple=False, mode='sample', interval=1,
                  same_frames=False):
         assert phase in ['train', 'test', 'val']
         self.phase = phase
         self.root = root
         self.clip_size = clip_size
         self.target_size = target_size
+        self.crop_size = crop_size
         self.SI = separate_instance  # 一个instance算一个视频
         if self.SI:
             assert not only_single
@@ -113,6 +114,8 @@ class TIANCHI(data.Dataset):
                 _mask = np.array(
                     Image.open(os.path.join(self.mask_dir, _video, temp_mask[0])).convert("P").resize(self.target_size,
                                                                                                       Image.BILINEAR))
+                # _mask = np.array(Image.open(os.path.join(self.mask_dir, _video, temp_mask[0])).convert("P"))
+
                 num_objects = _mask.max()
                 if self.OM and num_objects == 1:
                     continue
@@ -202,7 +205,12 @@ class TIANCHI(data.Dataset):
                 frames_num.append(random.randint(p[i], p[i + 1]))
         elif self.phase == 'train' and final_clip_size <= self.num_frames[video] and self.mode == 'sequence':
             ed = max(self.num_frames[video] - (final_clip_size - 1) * self.interval - 1, 0)
-            start_frame = random.randint(0, ed)
+            while True:
+                start_frame = random.randint(0, ed)
+                mask_file = os.path.join(self.mask_dir, video_true_name, self.mask_list[video][start_frame])
+                temp = np.array(Image.open(mask_file).convert('P'), dtype=np.uint8)
+                if (temp == object_label).sum() > 0:
+                    break
             frames_num = [start_frame + i * self.interval for i in range(final_clip_size)]
             frames_num = [min(self.num_frames[video] - 1, fn) for fn in frames_num]
         elif self.same_frames:
@@ -215,9 +223,11 @@ class TIANCHI(data.Dataset):
             img_file = os.path.join(self.image_dir, video_true_name, self.frame_list[video][frames_num[f]])
             N_frames[f] = np.array(
                 Image.open(img_file).convert('RGB').resize(self.target_size, Image.BILINEAR)) / 255.
+            # N_frames[f] = np.array(Image.open(img_file).convert('RGB')) / 255.
 
             mask_file = os.path.join(self.mask_dir, video_true_name, self.mask_list[video][frames_num[f]])
             temp = np.array(Image.open(mask_file).convert('P').resize(self.target_size, Image.BILINEAR), dtype=np.uint8)
+            # temp = np.array(Image.open(mask_file).convert('P'), dtype=np.uint8)
 
             temp_mask = np.zeros(temp.shape)
             if self.SI:
@@ -226,27 +236,38 @@ class TIANCHI(data.Dataset):
                 temp_mask[temp > 0] = 1
             N_masks[f] = (temp_mask != 0).astype(np.uint8)
 
-        # need_au = self.phase == 'train' and (np.random.rand() >= 0.3)
-        # if need_au:
-        #     seed = np.random.randint(99999)
-        #     # print('seed:',seed)
-        #     input_frames = (N_frames * 255).astype(np.uint8)
-        #     for t in range(len(N_frames)):
-        #         img_au, mask_au = self.aug(image=input_frames[t, np.newaxis, :, :, :].astype(np.uint8),
-        #                                    mask=N_masks[t, np.newaxis, :, :, np.newaxis], seed=seed)
-        #         N_frames[t] = img_au[0] / 255.
-        #         N_masks[t] = mask_au[0, :, :, 0]
+        N_frames_ = []
+        N_masks_ = []
+        if self.phase == 'train':
+            # seed = np.random.randint(99999)
+            input_frames = (N_frames * 255).astype(np.uint8)
+            for t in range(len(N_frames)):
+                count = 0
+                while count < 100:
+                    img_au, mask_au = self.aug(image=input_frames[t, np.newaxis, :, :, :].astype(np.uint8),
+                                               mask=N_masks[t, np.newaxis, :, :, np.newaxis])
+                    if np.sum(N_masks[t]) == 0 or \
+                            (np.sum(N_masks[t]) > 0 and float(np.sum(mask_au[0, :, :, 0])) / float(np.sum(N_masks[t]) + 1e-6) > 0.5):
+                        N_frames_.append(img_au[0] / 255.)
+                        N_masks_.append(mask_au[0, :, :, 0])
+                        break
+                    count += 1
+                if count >= 100:
+                    print(video)
+                    N_frames_.append(img_au[0] / 255.)
+                    N_masks_.append(mask_au[0, :, :, 0])
 
-        Fs = torch.from_numpy(N_frames).permute(3, 0, 1, 2).float()
-        Ms = torch.from_numpy(N_masks[np.newaxis, :, :, :]).long()
+        assert len(N_frames_) == final_clip_size
+        Fs = torch.from_numpy(np.array(N_frames_)).permute(3, 0, 1, 2).float()
+        Ms = torch.from_numpy(np.array(N_masks_)[np.newaxis, :, :, :]).long()
 
         sample = {
             'Fs': Fs, 'Ms': Ms, 'info': info
         }
         return sample
 
-    def aug(self, image, mask, seed):
-        ia.seed(seed)
+    def aug(self, image, mask, seed=None):
+        # ia.seed(seed)
 
         # Example batch of images.
         # The array has shape (32, 64, 64, 3) and dtype uint8.
@@ -258,26 +279,31 @@ class TIANCHI(data.Dataset):
         # print('COMBO: ',combo.shape)
 
         seq_all = iaa.Sequential([
-            iaa.Fliplr(0.5),  # horizontal flips
-            iaa.Affine(
-                scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
-                translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
-                rotate=(-25, 25),
-                shear=(-8, 8)
-            )
+            # iaa.Fliplr(0.5),  # horizontal flips
+            iaa.PadToFixedSize(width=self.crop_size[0], height=self.crop_size[1]),
+            iaa.CropToFixedSize(width=self.crop_size[0], height=self.crop_size[1])
+            # iaa.Affine(
+            #     scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
+            #     translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
+            #     rotate=(-25, 25),
+            #     shear=(-8, 8)
+            # )
         ], random_order=False)  # apply augmenters in random order
 
         seq_f = iaa.Sequential([
             iaa.Sometimes(0.5,
-                          iaa.GaussianBlur(sigma=(0, 0.01))
+                          iaa.OneOf([
+                              iaa.GaussianBlur((0.0, 1.0)),
+                              iaa.MotionBlur(k=(3, 7))
+                          ]),
                           ),
             # iaa.contrast.LinearContrast((0.75, 1.5)),
-            iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05 * 255), per_channel=0.5),
+            iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.1 * 255), per_channel=0.5),
             iaa.Multiply((0.8, 1.2), per_channel=0.2),
         ], random_order=False)
 
-        combo_aug = seq_all.augment_images(images=combo)
-        # print('combo_au: ',combo_aug.shape)
+        combo_aug = np.array(seq_all.augment_images(images=combo))
+        # print('combo_au: ', combo_aug.shape)
         images_aug = combo_aug[:, :, :, :3]
         masks_aug = combo_aug[:, :, :, 3:]
         images_aug = seq_f.augment_images(images=images_aug)
