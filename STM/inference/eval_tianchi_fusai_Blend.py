@@ -19,6 +19,7 @@ import zipfile
 from functools import wraps
 import random
 import numpy as np
+import tqdm
 
 ### My libs
 from STM.models.model_fusai import STM
@@ -214,8 +215,9 @@ def vos_inference():
     code_name = 'Tianchi fusai'
     # date = datetime.datetime.strftime(datetime.datetime.now(), '%y%m%d%H%M')
     print('Start Testing:', code_name)
+    progressbar = tqdm.tqdm(Testloader)
 
-    for seq, V in enumerate(Testloader):
+    for V in progressbar:
         Fs, info = V
         seq_name = info['name'][0]
         ori_shape = info['ori_shape']
@@ -398,7 +400,7 @@ def analyse_images(data_root):
 
     return v_frames
 
-
+@fn_timer
 def blend_results(tmp_dir, merge_dir, data_dir):
     print('Blending results...')
     img_root = os.path.join(data_dir, 'JPEGImages')
@@ -559,8 +561,9 @@ if __name__ == '__main__':
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
     TARGET_SHAPE = (1008, 560)
-    SCORE_THR = 0.8
-    SOLO_INTERVAL = 5
+    # TARGET_SHAPE = (864, 480)
+    SCORE_THR = 0.5
+    SOLO_INTERVAL = 2
     MAX_NUM = 8
     IOU1 = 0.5
     IOU2 = 0.1
