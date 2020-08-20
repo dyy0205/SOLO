@@ -16,6 +16,7 @@ import cv2
 from scipy import ndimage
 import time
 
+
 def init_detector(config, checkpoint=None, device='cuda:0'):
     """Initialize a detector from config file.
 
@@ -232,7 +233,7 @@ def show_result_ins(img,
         np.ndarray or None: If neither `show` nor `out_file` is specified, the
             visualized image is returned, otherwise None is returned.
     """
-    
+
     assert isinstance(class_names, (tuple, list))
     img = mmcv.imread(img)
     img_show = img.copy()
@@ -269,14 +270,15 @@ def show_result_ins(img,
         for _ in range(num_mask)
     ]
     for idx in range(num_mask):
-        idx = -(idx+1)
+        idx = -(idx + 1)
         cur_mask = seg_label[idx, :, :]
         cur_mask = mmcv.imresize(cur_mask, (w, h))
         cur_mask = (cur_mask > 0.5).astype(np.uint8)
-        # import cv2
-        # cv2.imwrite('/home/dingyangyang/SOLO/final_{}.jpg'.format(str(idx)), cur_mask*255)
+        import cv2
+        cv2.imwrite('/versa/dyy/SOLO/2209_{}.jpg'.format(str(idx)), cur_mask*255)
         if cur_mask.sum() == 0:
             continue
+
         color_mask = color_masks[idx]
         cur_mask_bool = cur_mask.astype(np.bool)
         img_show[cur_mask_bool] = img[cur_mask_bool] * 0.5 + color_mask * 0.5
@@ -288,7 +290,14 @@ def show_result_ins(img,
         center_y, center_x = ndimage.measurements.center_of_mass(cur_mask)
         vis_pos = (max(int(center_x) - 10, 0), int(center_y))
         cv2.putText(img_show, label_text, vis_pos,
-                        cv2.FONT_HERSHEY_COMPLEX, 0.3, (255, 255, 255))  # green
+                    cv2.FONT_HERSHEY_COMPLEX, 0.3, (255, 255, 255))  # green
+
+        # # write bbox
+        # binary_mask = maskUtils.encode(np.asfortranarray(cur_mask * 255))
+        # bbox = maskUtils.toBbox(binary_mask)
+        # x, y, width, height = map(int, bbox.tolist())
+        # cv2.rectangle(img_show, (x, y), (x + width, y + height), 255, 1)
+
     if out_file is None:
         return img
     else:

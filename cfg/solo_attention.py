@@ -1,13 +1,13 @@
 # model settings
 model = dict(
     type='SOLO',
-    pretrained='/home/dingyangyang/pretrained_models/tf_efficientnet_lite3_tuned.pth',
+    # pretrained='/versa/dyy/pretrained_models/tf_efficientnet_lite3_tuned.pth',
     backbone=dict(
         type='EfficientNet_Lite',
         model_name='efficientnet-b3',
         num_stages=7,
         out_indices=(1, 2, 4, 6),  # C2, C3, C4, C5
-        frozen_stages=7),
+        frozen_stages=-1),
     neck=dict(
         type='BiFPN_Lite',  # P2 ~ P6
         compound_coef=3,
@@ -29,14 +29,14 @@ model = dict(
             type='DiceLoss',
             use_sigmoid=True,
             loss_weight=3.0),
-        # loss_mask=dict(
-        #     type='BCELoss',
-        #     loss_weight=6.0),
-        # loss_ssim=dict(
-        #     type='SSIMLoss',
-        #     window_size=11,
-        #     size_average=True,
-        #     loss_weight=4.0),
+        loss_mask=dict(
+            type='BCELoss',
+            loss_weight=2.0),
+        loss_ssim=dict(
+            type='SSIMLoss',
+            window_size=11,
+            size_average=True,
+            loss_weight=2.0),
         loss_cate=dict(
             type='FocalLoss',
             use_sigmoid=True,
@@ -56,7 +56,7 @@ test_cfg = dict(
     max_per_img=100)
 # dataset settings
 dataset_type = 'CocoDataset'
-data_root = '/home/versa/dataset/MSCOCO/'
+data_root = '/versa/dyy/coco/'
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 train_pipeline = [
@@ -88,25 +88,25 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    imgs_per_gpu=12,
-    workers_per_gpu=2,
+    imgs_per_gpu=10,
+    workers_per_gpu=4,
     train=dict(
         type=dataset_type,
-        ann_file=data_root + 'train.json',
-        img_prefix=data_root + 'train2017/',
+        ann_file=data_root + 'train_td.json',
+        img_prefix=data_root + 'train_td/',  # '/versa/dataset/COCO2017/coco/train2017/',
         pipeline=train_pipeline),
     val=dict(
         type=dataset_type,
-        ann_file=data_root + 'val.json',
-        img_prefix=data_root + 'val2017/',
+        ann_file=data_root + 'val_td.json',
+        img_prefix=data_root + 'val_td/',
         pipeline=test_pipeline),
     test=dict(
         type=dataset_type,
-        ann_file=data_root + 'val.json',
-        img_prefix=data_root + 'val2017/',
+        ann_file=data_root + 'val_td.json',
+        img_prefix=data_root + 'val_td/',
         pipeline=test_pipeline))
 # optimizer
-optimizer = dict(type='SGD', lr=0.2, momentum=0.9, weight_decay=0.0001)
+optimizer = dict(type='SGD', lr=0.002, momentum=0.9, weight_decay=0.0001)
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 # learning policy
 lr_config = dict(
@@ -129,9 +129,7 @@ total_epochs = 12
 device_ids = range(8)
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
-work_dir = './work_dirs/solov2_attention_label_align/'
-# load_from = './work_dirs/solov2_attention_ssim/epoch_24.pth'
-# load_from = '/home/dingyangyang/pretrained_models/solo2-lite3_bifpn.pth'
-load_from = None
+work_dir = './work_dirs/solo_attention_bce_td/'
+load_from = './work_dirs/solo_attention_bce_td/epoch_12.pth'  # './solo2-lite3_bifpn.pth'
 resume_from = None
 workflow = [('train', 1)]

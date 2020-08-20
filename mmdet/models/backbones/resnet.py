@@ -309,7 +309,6 @@ def make_res_layer(block,
 @BACKBONES.register_module
 class ResNet(nn.Module):
     """ResNet backbone.
-
     Args:
         depth (int): Depth of resnet, from {18, 34, 50, 101, 152}.
         in_channels (int): Number of input image channels. Normally 3.
@@ -330,7 +329,6 @@ class ResNet(nn.Module):
             memory while slowing down the training speed.
         zero_init_residual (bool): whether to use zero init for last norm layer
             in resblocks to let them behave as identity.
-
     Example:
         >>> from mmdet.models import ResNet
         >>> import torch

@@ -19,14 +19,13 @@ model = dict(
         type='SOLOV2Head',
         num_classes=5,
         in_channels=160,
-        stacked_convs=2,
+        stacked_convs=4,
         seg_feat_channels=160,
         strides=[8, 8, 16, 32, 32],
         scale_ranges=((1, 64), (32, 128), (64, 256), (128, 512), (256, 2048)),
         sigma=0.2,
         num_grids=[40, 36, 24, 16, 12],
         cate_down_pos=0,
-        with_deform=False,
         # fp16_training=True,
         loss_ins=dict(
             type='DiceLoss',
@@ -99,7 +98,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    imgs_per_gpu=24,
+    imgs_per_gpu=20,
     workers_per_gpu=4,
     train=dict(
         type=dataset_type,

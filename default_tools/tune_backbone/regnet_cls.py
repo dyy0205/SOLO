@@ -22,12 +22,14 @@ class RegNet_cls(RegNet):
         super().__init__(arch, base_channels=base_channels)
         self.num_classes = num_classes
         self.avg_pool = nn.AvgPool2d((7, 7), (1, 1))
-        self.last_linear = nn.Linear(672, num_classes)
+        # self.last_linear = nn.Linear(672, num_classes)
+        self.last_linear = nn.Linear(912, num_classes)
         self.init_weights(pretrained=pretrained)
 
     def forward(self, inputs):
         # Convolution layers
         x = self.extract_features(inputs)
+        # print(x.shape)
 
         # Pooling and final linear layer
         x = self.avg_pool(x)
@@ -37,8 +39,8 @@ class RegNet_cls(RegNet):
 
 
 if __name__ == '__main__':
-    model = RegNet_cls(arch='regnetx_800mf', base_channels=32, num_classes=4,
-                       pretrained='/versa/dyy/pretrained_models/RegNetX-800MF_dds_8gpu.pth')
+    model = RegNet_cls(arch='regnetx_1.6gf', base_channels=32, num_classes=4,
+                       pretrained='/versa/dyy/pretrained_models/RegNetX-1.6GF_dds_8gpu.pth')
     # print(model)
     # for i, (k, v) in enumerate(model.state_dict().items()):
     #     print(i, k, v.shape)
@@ -78,10 +80,10 @@ if __name__ == '__main__':
 
     criterion = nn.CrossEntropyLoss()
     # Observe that all parameters are being optimized
-    optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+    optimizer = optim.SGD(model.parameters(), lr=0.005, momentum=0.9)
     # Decay LR by a factor of 0.1 every 7 epochs
     # scheduler = lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
-    scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-4)  # T_max means 1/2 cosine period
+    scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-5)  # T_max means 1/2 cosine period
 
     num_epochs = 50
 
@@ -142,7 +144,7 @@ if __name__ == '__main__':
                 best_model_wts = copy.deepcopy(model.state_dict())
 
         torch.save(model.state_dict(),
-                   '/versa/dyy/SOLO/work_dirs/backbone/reg800/tuned-{}-{}.pth'.format(epoch, epoch_acc))
+                   '/versa/dyy/SOLO/work_dirs/backbone/reg16/tuned-{}-{}.pth'.format(epoch, epoch_acc))
         print()
 
     time_elapsed = time.time() - since
@@ -153,4 +155,4 @@ if __name__ == '__main__':
     # load best model weights
     model.load_state_dict(best_model_wts)
     torch.save(model.cpu().state_dict(),
-               '/versa/dyy/SOLO/work_dirs/backbone/reg800/tuned-best-{}.pth'.format(best_acc))
+               '/versa/dyy/SOLO/work_dirs/backbone/reg16/tuned-best-{}.pth'.format(best_acc))

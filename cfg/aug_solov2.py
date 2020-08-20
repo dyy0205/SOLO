@@ -21,7 +21,8 @@ model = dict(
         stacked_convs=4,
         seg_feat_channels=160,
         strides=[8, 8, 16, 32, 32],
-        scale_ranges=((1, 64), (32, 128), (64, 256), (128, 512), (256, 2048)),
+        # scale_ranges=((1, 64), (32, 128), (64, 256), (128, 512), (256, 2048)),
+        scale_ranges=((1, 64), (64, 128), (128, 256), (256, 512), (512, 2048)),
         sigma=0.2,
         num_grids=[40, 36, 24, 16, 12],
         cate_down_pos=0,
@@ -29,6 +30,10 @@ model = dict(
             type='DiceLoss',
             use_sigmoid=True,
             loss_weight=3.0),
+        loss_overlap=dict(
+            type='ReversedDiceLoss',
+            use_sigmoid=True,
+            loss_weight=10.0),
         loss_cate=dict(
             type='FocalLoss',
             use_sigmoid=True,
@@ -48,7 +53,7 @@ test_cfg = dict(
     max_per_img=100)
 # dataset settings
 dataset_type = 'CocoDataset'
-data_root = '/home/versa/dataset/MSCOCO/'
+data_root = '/versa/dataset/COCO2017/coco/'
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 train_pipeline = [
@@ -80,7 +85,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    imgs_per_gpu=8,
+    imgs_per_gpu=11,
     workers_per_gpu=2,
     train=dict(
         type=dataset_type,
@@ -98,7 +103,7 @@ data = dict(
         img_prefix=data_root + 'val2017/',
         pipeline=test_pipeline))
 # optimizer
-optimizer = dict(type='SGD', lr=0.001, momentum=0.9, weight_decay=0.0001)
+optimizer = dict(type='SGD', lr=0.0001, momentum=0.9, weight_decay=0.0001)
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 # learning policy
 lr_config = dict(
@@ -110,7 +115,7 @@ lr_config = dict(
 checkpoint_config = dict(interval=1)
 # yapf:disable
 log_config = dict(
-    interval=200,
+    interval=500,
     hooks=[
         dict(type='TextLoggerHook'),
         # dict(type='TensorboardLoggerHook')
@@ -122,6 +127,6 @@ device_ids = range(8)
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
 work_dir = './work_dirs/aug_solov2_add'
-load_from = './work_dirs/aug_solov2_scratch/epoch_12.pth'
+load_from = './work_dirs/aug_solov2_scratch_epoch_12.pth'
 resume_from = None
 workflow = [('train', 1)]
