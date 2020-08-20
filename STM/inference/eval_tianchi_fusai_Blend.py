@@ -44,7 +44,6 @@ def fn_timer(function):
 
 
 def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None):
-
     seg_result_idx = [i[3] for i in seg_resuls]
 
     instance_idx = 1
@@ -96,7 +95,7 @@ def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None
                 this_frame_results = seg_resuls[idx]
                 masks = this_frame_results[0]
                 ious = []
-                for   mask in masks:
+                for mask in masks:
                     mask = mask.astype(np.uint8)
                     mask = torch.from_numpy(mask)
                     iou = get_video_mIoU(pred, mask)
@@ -309,7 +308,7 @@ def process_solo_result(result, mask_shape):
     final.append(np.array(result_))
     final.append(result[1].cpu().numpy())
     final.append(result[2].cpu().numpy())
-    return final # [array, array, array]
+    return final  # [array, array, array]
 
 
 def generate_imagesets():
@@ -323,7 +322,7 @@ def generate_imagesets():
             f.write('\n')
 
 
-def filter_score(results): # list(array, array, array, int)
+def filter_score(results):  # list(array, array, array, int)
     filtered = []
     num = 0
     for result in results:
@@ -347,7 +346,6 @@ def filter_score(results): # list(array, array, array, int)
 
 
 def filter_result(result, index=0, max_num=8):
-    # TODO: if all frame score smaller than score_thr, max score frame should be reserved.
     assert isinstance(result, list)
     result = result[0]
     if result is None:

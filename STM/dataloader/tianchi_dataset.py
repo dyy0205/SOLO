@@ -70,8 +70,8 @@ class TIANCHI(data.Dataset):
     '''
 
     def __init__(self, root, phase='train', imset='2016/val.txt', separate_instance=False, only_single=False,
-                 target_size=(864, 480), crop_size=(384, 384), clip_size=3, only_multiple=False, mode='sample', interval=1,
-                 same_frames=False):
+                 target_size=(864, 480), crop_size=(384, 384), clip_size=3, only_multiple=False, mode='sample',
+                 interval=1, same_frames=False, train_aug=False):
         assert phase in ['train', 'test', 'val']
         self.phase = phase
         self.root = root
@@ -85,6 +85,7 @@ class TIANCHI(data.Dataset):
         self.OM = only_multiple
         self.mode = mode
         self.interval = interval
+        self.train_aug = train_aug
         assert not (self.OM and self.OS)
         assert mode in ('sample', 'sequence')
         self.same_frames = same_frames
@@ -192,6 +193,7 @@ class TIANCHI(data.Dataset):
         info['name'] = video
         info['num_frames'] = final_clip_size
         info['valid_frames'] = np.zeros(final_clip_size)
+        info['target_shape'] = self.target_size
 
         N_frames = np.empty((final_clip_size,) + self.shape[video] + (3,), dtype=np.float32)
         N_masks = np.empty((final_clip_size,) + self.shape[video], dtype=np.uint8)
@@ -218,6 +220,8 @@ class TIANCHI(data.Dataset):
         else:
             frames_num = list(range(final_clip_size))
 
+        info['frames'] = frames_num
+
         for f in range(len(frames_num)):
             info['valid_frames'][f] = 1
             img_file = os.path.join(self.image_dir, video_true_name, self.frame_list[video][frames_num[f]])
@@ -238,7 +242,7 @@ class TIANCHI(data.Dataset):
 
         N_frames_ = []
         N_masks_ = []
-        if self.phase == 'train':
+        if self.phase == 'train' and self.train_aug:
             # seed = np.random.randint(99999)
             input_frames = (N_frames * 255).astype(np.uint8)
             for t in range(len(N_frames)):
@@ -257,9 +261,12 @@ class TIANCHI(data.Dataset):
                     N_frames_.append(img_au[0] / 255.)
                     N_masks_.append(mask_au[0, :, :, 0])
 
-        assert len(N_frames_) == final_clip_size
-        Fs = torch.from_numpy(np.array(N_frames_)).permute(3, 0, 1, 2).float()
-        Ms = torch.from_numpy(np.array(N_masks_)[np.newaxis, :, :, :]).long()
+            assert len(N_frames_) == final_clip_size
+            Fs = torch.from_numpy(np.array(N_frames_)).permute(3, 0, 1, 2).float()
+            Ms = torch.from_numpy(np.array(N_masks_)[np.newaxis, :, :, :]).long()
+        else:
+            Fs = torch.from_numpy(np.array(N_frames)).permute(3, 0, 1, 2).float()
+            Ms = torch.from_numpy(np.array(N_masks)[np.newaxis, :, :, :]).long()
 
         sample = {
             'Fs': Fs, 'Ms': Ms, 'info': info
