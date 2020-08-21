@@ -13,7 +13,10 @@ def _loss(x, y):
 
 
 def get_video_mIoU(predn, all_Mn):  # [c,t,h,w]
-    pred = predn.squeeze().cpu().data.numpy()
+    if isinstance(predn, torch.Tensor):
+        pred = predn.squeeze().cpu().data.numpy()
+    else:
+        pred = predn.squeeze()
     # np.save('blackswan.npy', pred)
     if isinstance(all_Mn, torch.Tensor):
         gt = all_Mn.squeeze().cpu().data.numpy()  # [t,h,w]

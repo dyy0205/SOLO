@@ -148,7 +148,7 @@ def validate(args, val_loader, model):
         # error_nums = 0
         with torch.no_grad():
             name = info['name']
-            loss_video, video_mIou = Run_video(model, Fs, Ms, num_frames, Mem_every=1, Mem_number=None, args=args)
+            loss_video, video_mIou = Run_video(model, Fs, Ms, num_frames, Mem_every=5, Mem_number=None)
             loss_all_videos += loss_video
             miou_all_videos += video_mIou
             progressbar.set_description(
@@ -316,7 +316,7 @@ if __name__ == '__main__':
     # val_dataset = DAVIS(DAVIS_ROOT, phase='val', imset='tianchi_val_cf.txt', resolution='480p',
     #                     separate_instance=True, only_single=False, target_size=(864, 480))
     val_dataset = TIANCHI(DAVIS_ROOT, phase='val', imset='tianchi_val_cf.txt', separate_instance=True,
-                          target_size=(864, 480), same_frames=True)
+                          target_size=(864, 480), same_frames=False)
     val_loader = data.DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 
     model = nn.DataParallel(STM())

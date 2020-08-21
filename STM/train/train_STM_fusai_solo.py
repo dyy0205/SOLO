@@ -147,10 +147,25 @@ def validate(args, val_loader, model):
     for seq, batch in enumerate(progressbar):
         Fs, Ms, info = batch['Fs'], batch['Ms'], batch['info']
         num_frames = info['num_frames'][0].item()
+        name = info['name']
+        batch_size = len(name)
+        solo_results = []
+        for i in range(batch_size):
+            seq_name = name[i]
+            if '_' in seq_name:
+                video_name = seq_name.split('_')[0]
+            else:
+                video_name = seq_name
+            target_shape = tuple([t[i].item() for t in info['target_shape']])
+            frames = [f[i].item() for f in info['frames']]
+            seg_results = mask_inference(video_name, target_shape, frames)
+            solo_results.append(seg_results)
         # error_nums = 0
         with torch.no_grad():
-            name = info['name']
-            loss_video, video_mIou = Run_video(model, Fs, Ms, num_frames, Mem_every=1, Mem_number=None, args=args)
+            # loss_video, video_mIou = Run_video(model, Fs, Ms, num_frames, Mem_every=1, Mem_number=None, args=args)
+            loss_video, video_mIou = Run_video(model, Fs, Ms, num_frames, solo_results=solo_results, Mem_every=5,
+                                               Mem_number=None, mode='val')
+
             loss_all_videos += loss_video
             miou_all_videos += video_mIou
             progressbar.set_description(
@@ -237,7 +252,8 @@ def train(args, optimizer, train_loader, model, epochs, epoch_start=0, lr=1e-5):
 
             optimizer.zero_grad()
 
-            loss_video, video_mIou = Run_video(model, Fs, Ms, num_frames, solo_results=solo_results, Mem_every=1, Mem_number=None)
+            loss_video, video_mIou = Run_video(model, Fs, Ms, num_frames, solo_results=solo_results, Mem_every=1,
+                                               Mem_number=None)
 
             # backward
             loss_video.backward()
@@ -449,7 +465,7 @@ if __name__ == '__main__':
     # val_dataset = DAVIS(DAVIS_ROOT, phase='val', imset='tianchi_val_cf.txt', resolution='480p',
     #                     separate_instance=True, only_single=False, target_size=(864, 480))
     val_dataset = TIANCHI(DAVIS_ROOT, phase='val', imset='tianchi_val_cf.txt', separate_instance=True,
-                          target_size=(864, 480), same_frames=True)
+                          target_size=(864, 480), same_frames=False)
     val_loader = data.DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 
     model = nn.DataParallel(STM())

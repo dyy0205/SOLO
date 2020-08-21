@@ -321,10 +321,14 @@ def Run_video(model, Fs, Ms, num_frames, solo_results=None, Mem_every=None, Mem_
         Sm = torch.zeros_like(Es[:, :, 0])
         #process solo result
         for b in range(B):
-            gt = Ms[b, :, t]
+            if mode == 'train':
+                gt = Ms[b, :, t].cpu().numpy()
+            else:
+                gt = Es[b, :, t-1]
+                gt = torch.round(gt).cpu().numpy()
             solo = solo_results[b]
             if len(solo) == 0:
-                m_ = np.ones_like(gt)
+                m_ = np.zeros_like(gt)
             else:
                 masks = solo[t][0]
                 if masks is not None:
@@ -333,13 +337,13 @@ def Run_video(model, Fs, Ms, num_frames, solo_results=None, Mem_every=None, Mem_
                         iou = get_video_mIoU(gt, mask)
                         ious.append(iou)
                     ious = np.array(ious)
-                    if np.any(ious >= 0.5):
+                    if np.any(ious >= 0.6):
                         idx = np.argmax(ious)
                         m_ = masks[idx]
                     else:
-                        m_ = np.ones_like(gt)
+                        m_ = np.zeros_like(gt)
                 else:
-                    m_ = np.ones_like(gt)
+                    m_ = np.zeros_like(gt)
             m_ = torch.from_numpy(m_).cuda()
             if len(m_.shape) == 2:
                 m_ = m_.unsqueeze(0)

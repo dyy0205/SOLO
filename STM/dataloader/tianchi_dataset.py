@@ -93,17 +93,14 @@ class TIANCHI(data.Dataset):
         self.mask_dir = os.path.join(root, 'Annotations')
         self.image_dir = os.path.join(root, 'JPEGImages')
         _imset_dir = os.path.join(root, 'ImageSets')
-        # print(_imset_dir)
         _imset_f = os.path.join(_imset_dir, imset)
 
         self.videos = []
         self.num_frames = {}
-        # self.num_objects = {}
         self.shape = {}
         self.frame_list = {}
         self.mask_list = {}
         self.not_empty_frames = {}
-        # print(_imset_f)
         with open(os.path.join(_imset_f), "r") as lines:
             for line in lines:
                 _video = line.rstrip('\n')
@@ -198,6 +195,7 @@ class TIANCHI(data.Dataset):
         N_frames = np.empty((final_clip_size,) + self.shape[video] + (3,), dtype=np.float32)
         N_masks = np.empty((final_clip_size,) + self.shape[video], dtype=np.uint8)
 
+        # generate frame numbers
         if self.phase == 'train' and final_clip_size < self.num_frames[video] and self.mode == 'sample':
             p = [int(x / final_clip_size * frames) for x in range(1, final_clip_size)]
             p.insert(0, 0)
@@ -240,6 +238,7 @@ class TIANCHI(data.Dataset):
                 temp_mask[temp > 0] = 1
             N_masks[f] = (temp_mask != 0).astype(np.uint8)
 
+        # augmentation
         N_frames_ = []
         N_masks_ = []
         if self.phase == 'train' and self.train_aug:
