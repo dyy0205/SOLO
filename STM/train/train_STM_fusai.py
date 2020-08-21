@@ -87,7 +87,11 @@ def Run_video(model, Fs, Ms, num_frames, Mem_every=None, Mem_number=None, mode='
             this_values_m = torch.cat([values, pre_value], dim=2)
 
         # segment
-        logits, p_m2, p_m3 = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1].detach()])  # B 2 h w
+        if mode == 'train':
+            prev_mask = Ms[:, :, t - 1]
+        else:
+            prev_mask = torch.round(Es[:, :, t - 1].detach())
+        logits, p_m2, p_m3 = model([Fs[:, :, t], this_keys_m, this_values_m, prev_mask])
         em = F.softmax(logits, dim=1)[:, 1]  # B h w
         Es[:, 0, t] = em
 
