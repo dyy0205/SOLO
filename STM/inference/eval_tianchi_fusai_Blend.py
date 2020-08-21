@@ -526,7 +526,7 @@ def save_mask(img, result, score_thr, out_dir):
 
 
 if __name__ == '__main__':
-    mode = 'offline'
+    mode = 'online'
     if mode == 'online':
         DATA_ROOT = '/workspace/user_data/data'
         IMG_ROOT = '/tcdata'
@@ -560,7 +560,7 @@ if __name__ == '__main__':
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
-    TARGET_SHAPE = (1008, 560)
+    TARGET_SHAPE = (1120, 608)
     # TARGET_SHAPE = (864, 480)
     SCORE_THR = 0.5
     SOLO_INTERVAL = 2
