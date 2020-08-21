@@ -152,7 +152,8 @@ def validate(args, val_loader, model):
         # error_nums = 0
         with torch.no_grad():
             name = info['name']
-            loss_video, video_mIou = Run_video(model, Fs, Ms, num_frames, Mem_every=5, Mem_number=None)
+            loss_video, video_mIou = Run_video(model, Fs, Ms, num_frames, Mem_every=5, Mem_number=None,
+                                               mode='val')
             loss_all_videos += loss_video
             miou_all_videos += video_mIou
             progressbar.set_description(
@@ -227,7 +228,8 @@ def train(args, optimizer, train_loader, model, epochs, epoch_start=0, lr=1e-5):
             name = info['name']
             optimizer.zero_grad()
 
-            loss_video, video_mIou = Run_video(model, Fs, Ms, num_frames, Mem_every=1, Mem_number=None)
+            loss_video, video_mIou = Run_video(model, Fs, Ms, num_frames, Mem_every=1, Mem_number=None,
+                                               mode='train')
 
             # backward
             loss_video.backward()
