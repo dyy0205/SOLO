@@ -63,10 +63,14 @@ def get_video_miou(video_dir, gt_dir):
         for c in checked:
             if c in iou_d[g].keys():
                 iou_d[g].pop(c)
-        best_iou = max(iou_d.get(g).values())
+        try:
+            best_iou = max(iou_d.get(g).values())
+        except Exception:
+            best_iou = 0
         for k, v in iou_d[g].items():
             if v == best_iou:
                 checked.append(k)
+                print(g, k, best_iou)
         result.append(best_iou)
 
     return np.mean(result)

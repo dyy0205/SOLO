@@ -46,8 +46,6 @@ def fn_timer(function):
 
 
 def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None):
-    seg_result_idx = [i[3] for i in seg_resuls]
-
     instance_idx = 1
     b, c, T, h, w = Fs.shape
     results = []
@@ -61,128 +59,134 @@ def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None
         if np.all([len(i[0]) == 0 for i in seg_resuls]):
             print('Run video over!')
             break
-        if instance_idx > MAX_NUM:
-            print('Max instance number!')
-            break
+        seg_result_idx = [i[3] for i in seg_resuls]
         start_frame_idx = np.argmax([max(i[2]) if i[2] != [] else 0 for i in seg_resuls])
         start_frame = seg_result_idx[start_frame_idx]
-        start_mask = seg_resuls[start_frame_idx][0][0].astype(np.uint8)
-        # start_mask = cv2.resize(start_mask, (w, h))
-        start_mask = torch.from_numpy(start_mask).cuda()
+        num_ins_in_frame = len(seg_resuls[start_frame_idx][0])
+        print('Running video on frame:{}, ins in this frame:{}'.format(start_frame, num_ins_in_frame))
+        for p in range(num_ins_in_frame):
+            if instance_idx > MAX_NUM:
+                print('Max instance number!')
+                break
+            start_mask = seg_resuls[start_frame_idx][0][p].astype(np.uint8)
+            # start_mask = cv2.resize(start_mask, (w, h))
+            start_mask = torch.from_numpy(start_mask).cuda()
 
-        Es = torch.zeros((b, 1, T, h, w)).float().cuda()
-        Es[:, :, start_frame] = start_mask
-        to_memorize = [int(i) for i in np.arange(start_frame, num_frames, step=Mem_every)]
-        for t in range(start_frame + 1, num_frames):  # frames after
-            # memorize
-            pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
-            pre_key = pre_key.unsqueeze(2)
-            pre_value = pre_value.unsqueeze(2)
+            Es = torch.zeros((b, 1, T, h, w)).float().cuda()
+            Es[:, :, start_frame] = start_mask
+            to_memorize = [int(i) for i in np.arange(start_frame, num_frames, step=Mem_every)]
+            for t in range(start_frame + 1, num_frames):  # frames after
+                # memorize
+                pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
+                pre_key = pre_key.unsqueeze(2)
+                pre_value = pre_value.unsqueeze(2)
 
-            if t - 1 == start_frame:  # the first frame
-                this_keys_m, this_values_m = pre_key, pre_value
-            else:  # other frame
-                this_keys_m = torch.cat([keys, pre_key], dim=2)
-                this_values_m = torch.cat([values, pre_value], dim=2)
+                if t - 1 == start_frame:  # the first frame
+                    this_keys_m, this_values_m = pre_key, pre_value
+                else:  # other frame
+                    this_keys_m = torch.cat([keys, pre_key], dim=2)
+                    this_values_m = torch.cat([values, pre_value], dim=2)
 
-            # segment
-            logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1].detach()])  # B 2 h w
-            em = F.softmax(logits, dim=1)[:, 1]  # B h w
-            Es[:, 0, t] = em
+                # segment
+                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1].detach()])  # B 2 h w
+                em = F.softmax(logits, dim=1)[:, 1]  # B h w
+                Es[:, 0, t] = em
 
-            # check solo result
-            pred = torch.round(em.float())
-            if t in seg_result_idx:
-                idx = seg_result_idx.index(t)
-                this_frame_results = seg_resuls[idx]
-                masks = this_frame_results[0]
-                ious = []
-                for mask in masks:
-                    mask = mask.astype(np.uint8)
-                    mask = torch.from_numpy(mask)
-                    iou = get_video_mIoU(pred, mask)
-                    ious.append(iou)
-                if ious != []:
-                    ious = np.array(ious)
-                    reserve = list(range(len(ious)))
-                    if sum(ious >= IOU1) >= 1:
-                        same_idx = np.argmax(ious)
-                        Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
-                        reserve.remove(same_idx)
+                # check solo result
+                pred = torch.round(em.float())
+                if t in seg_result_idx:
+                    idx = seg_result_idx.index(t)
+                    this_frame_results = seg_resuls[idx]
+                    masks = this_frame_results[0]
+                    ious = []
+                    for mask in masks:
+                        mask = mask.astype(np.uint8)
+                        mask = torch.from_numpy(mask)
+                        iou = get_video_mIoU(pred, mask)
+                        ious.append(iou)
+                    if ious != []:
+                        ious = np.array(ious)
+                        reserve = list(range(len(ious)))
+                        if sum(ious >= IOU1) >= 1:
+                            same_idx = np.argmax(ious)
+                            Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
+                            reserve.remove(same_idx)
 
-                    for i, iou in enumerate(ious):
-                        if iou >= IOU2 and iou < IOU1:
-                            reserve.remove(i)
+                        for i, iou in enumerate(ious):
+                            if iou >= IOU2 and iou < IOU1:
+                                reserve.remove(i)
 
-                    reserve_result = []
-                    for n in range(3):
-                        reserve_result.append([this_frame_results[n][i] for i in reserve])
-                    reserve_result.append(this_frame_results[3])
-                    seg_resuls[idx] = reserve_result
+                        reserve_result = []
+                        for n in range(3):
+                            reserve_result.append([this_frame_results[n][i] for i in reserve])
+                        reserve_result.append(this_frame_results[3])
+                        seg_resuls[idx] = reserve_result
 
-            # update key and value
-            if t - 1 in to_memorize:
-                keys, values = this_keys_m, this_values_m
+                # update key and value
+                if t - 1 in to_memorize:
+                    keys, values = this_keys_m, this_values_m
 
-        to_memorize = [start_frame - int(i) for i in np.arange(0, start_frame + 1, step=Mem_every)]
-        for t in list(range(0, start_frame))[::-1]:  # frames before
-            # memorize
-            pre_key, pre_value = model([Fs[:, :, t + 1], Es[:, :, t + 1]])
-            pre_key = pre_key.unsqueeze(2)
-            pre_value = pre_value.unsqueeze(2)
+            to_memorize = [start_frame - int(i) for i in np.arange(0, start_frame + 1, step=Mem_every)]
+            for t in list(range(0, start_frame))[::-1]:  # frames before
+                # memorize
+                pre_key, pre_value = model([Fs[:, :, t + 1], Es[:, :, t + 1]])
+                pre_key = pre_key.unsqueeze(2)
+                pre_value = pre_value.unsqueeze(2)
 
-            if t + 1 == start_frame:  # the first frame
-                this_keys_m, this_values_m = pre_key, pre_value
-            else:  # other frame
-                this_keys_m = torch.cat([keys, pre_key], dim=2)
-                this_values_m = torch.cat([values, pre_value], dim=2)
+                if t + 1 == start_frame:  # the first frame
+                    this_keys_m, this_values_m = pre_key, pre_value
+                else:  # other frame
+                    this_keys_m = torch.cat([keys, pre_key], dim=2)
+                    this_values_m = torch.cat([values, pre_value], dim=2)
 
-            # segment
-            logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t + 1].detach()])  # B 2 h w
-            em = F.softmax(logits, dim=1)[:, 1]  # B h w
-            Es[:, 0, t] = em
+                # segment
+                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t + 1].detach()])  # B 2 h w
+                em = F.softmax(logits, dim=1)[:, 1]  # B h w
+                Es[:, 0, t] = em
 
-            # check solo result
-            pred = torch.round(em.float())
-            if t in seg_result_idx:
-                idx = seg_result_idx.index(t)
-                this_frame_results = seg_resuls[idx]
-                masks = this_frame_results[0]
-                ious = []
-                for mask in masks:
-                    mask = mask.astype(np.uint8)
-                    mask = torch.from_numpy(mask)
-                    iou = get_video_mIoU(pred, mask)
-                    ious.append(iou)
-                if ious != []:
-                    ious = np.array(ious)
-                    reserve = list(range(len(ious)))
-                    if sum(ious >= IOU1) >= 1:
-                        same_idx = np.argmax(ious)
-                        Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
-                        reserve.remove(same_idx)
+                # check solo result
+                pred = torch.round(em.float())
+                if t in seg_result_idx:
+                    idx = seg_result_idx.index(t)
+                    this_frame_results = seg_resuls[idx]
+                    masks = this_frame_results[0]
+                    ious = []
+                    for mask in masks:
+                        mask = mask.astype(np.uint8)
+                        mask = torch.from_numpy(mask)
+                        iou = get_video_mIoU(pred, mask)
+                        ious.append(iou)
+                    if ious != []:
+                        ious = np.array(ious)
+                        reserve = list(range(len(ious)))
+                        if sum(ious >= IOU1) >= 1:
+                            same_idx = np.argmax(ious)
+                            Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
+                            reserve.remove(same_idx)
 
-                    for i, iou in enumerate(ious):
-                        if iou >= IOU2 and iou < IOU1:
-                            reserve.remove(i)
+                        for i, iou in enumerate(ious):
+                            if iou >= IOU2 and iou < IOU1:
+                                reserve.remove(i)
 
-                    reserve_result = []
-                    for n in range(3):
-                        reserve_result.append([this_frame_results[n][i] for i in reserve])
-                    reserve_result.append(this_frame_results[3])
-                    seg_resuls[idx] = reserve_result
+                        reserve_result = []
+                        for n in range(3):
+                            reserve_result.append([this_frame_results[n][i] for i in reserve])
+                        reserve_result.append(this_frame_results[3])
+                        seg_resuls[idx] = reserve_result
 
-            # update key and value
-            if t + 1 in to_memorize:
-                keys, values = this_keys_m, this_values_m
+                # update key and value
+                if t + 1 in to_memorize:
+                    keys, values = this_keys_m, this_values_m
 
-        for j in range(3):
-            seg_resuls[start_frame_idx][j].pop(0)
+            # for j in range(3):
+            #     seg_resuls[start_frame_idx][j].pop(0)
 
-        pred = torch.round(Es.float())
-        results.append((pred, instance_idx))
+            pred = torch.round(Es.float())
+            results.append((pred, instance_idx))
 
-        instance_idx += 1
+            instance_idx += 1
+
+        seg_resuls.pop(start_frame_idx)
 
     return results
 
@@ -592,7 +596,7 @@ def get_tmp_match_lst(tmp_dir, ins_lst, iou_thr=0.5):
 
 
 if __name__ == '__main__':
-    mode = 'online'
+    mode = 'offline'
     if mode == 'online':
         DATA_ROOT = '/workspace/user_data/data'
         IMG_ROOT = '/tcdata'
@@ -637,7 +641,7 @@ if __name__ == '__main__':
     generate_imagesets()
     vos_inference()
     blend_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
-    zip_result(MERGE_PATH, SAVE_PATH)
+    # zip_result(MERGE_PATH, SAVE_PATH)
 
     if mode != 'online':
         generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)

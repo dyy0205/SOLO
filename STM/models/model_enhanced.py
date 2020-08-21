@@ -249,7 +249,6 @@ class STM(nn.Module):
         # encode
         r4, r3, r2, _, _, x = self.Encoder_Q(frame)
         t4, t3, t2, _, _, tx = self.Encoder_Q(template)
-        # TODO: modify template conv
         b, c, h, w = r4.shape
         f = torch.zeros(b, 1, h, w).cuda()
         for i in range(b):

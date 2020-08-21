@@ -320,6 +320,7 @@ def Run_video(model, Fs, Ms, num_frames, solo_results=None, Mem_every=None, Mem_
 
         Sm = torch.zeros_like(Es[:, :, 0])
         #process solo result
+        st = time.time()
         for b in range(B):
             if mode == 'train':
                 gt = Ms[b, :, t]
@@ -347,6 +348,8 @@ def Run_video(model, Fs, Ms, num_frames, solo_results=None, Mem_every=None, Mem_
             if len(m_.shape) == 2:
                 m_ = m_.unsqueeze(0)
             Sm[b] = m_
+        ed = time.time()
+        print('Cal IOU time cost: {:.2f}s'.format(ed - st))
 
 
         if t - 1 == 0:  # the first frame

@@ -13,6 +13,7 @@ import argparse
 import matplotlib.pyplot as plt
 import csv
 import warnings
+import time
 
 warnings.filterwarnings('ignore')
 
@@ -239,6 +240,9 @@ def train(args, optimizer, train_loader, model, epochs, epoch_start=0, lr=1e-5):
             name = info['name']
             batch_size = len(name)
             solo_results = []
+
+            # TODO: solo infer at the beginning, load solo result in dataset.
+            st = time.time()
             for i in range(batch_size):
                 seq_name = name[i]
                 if '_' in seq_name:
@@ -249,6 +253,8 @@ def train(args, optimizer, train_loader, model, epochs, epoch_start=0, lr=1e-5):
                 frames = [f[i].item() for f in info['frames']]
                 seg_results = mask_inference(video_name, target_shape, frames)
                 solo_results.append(seg_results)
+            ed = time.time()
+            print('Solo mask time cost: {:.2f}s'.format(ed - st))
 
             optimizer.zero_grad()
 
