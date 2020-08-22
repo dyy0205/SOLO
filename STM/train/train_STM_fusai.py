@@ -51,6 +51,7 @@ def parse_args():
     parser.add_argument('--save_interval', type=int, default=1)
     parser.add_argument('--validate_interval', type=int, default=1)
     parser.add_argument('--info_interval', type=int, default=10)
+    parser.add_argument('--train_aug', action='store_true', help='whether to train with data aug')
     parser.add_argument("--davis", type=str, default='/workspace/dataset/VOS/tianchiyusai')
     parser.add_argument("--gpu", type=str, default='0', help="0; 0,1; 0,3; etc")
     # val
@@ -459,7 +460,7 @@ if __name__ == '__main__':
             # prepare training data
             train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train_cf.txt', separate_instance=True,
                                     only_single=False, target_size=(864, 480), clip_size=clip_size, mode='sequence',
-                                    interval=i, train_aug=True)
+                                    interval=i, train_aug=args.train_aug)
             train_loader = data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0,
                                            pin_memory=True)
 
