@@ -97,20 +97,20 @@ def Run_video(model, Fs, Ms, num_frames, Mem_every=None, Mem_number=None, mode='
     Es = torch.zeros((b, 1, t, h, w)).float().cuda()  # [1,1,50,480,864][b,c,t,h,w]
     Es[:, :, 0] = Ms[:, :, 0]
 
-    # Os = torch.zeros((b, c, int(h / 4), int(w / 4)))
-    # first_frame = Fs[:, :, 0]
-    # first_mask = Ms[:, :, 0]
-    # first_frame = first_frame * first_mask.repeat(1, 3, 1, 1).type(torch.float)
-    # for i in range(b):
-    #     mask_ = first_mask[i]
-    #     mask_ = mask_.squeeze(0).cpu().numpy().astype(np.uint8)
-    #     x, y, w_, h_ = cv2.boundingRect(mask_)
-    #     patch = first_frame[i, :, y:(y + h_), x:(x + w_)].cpu().numpy()
-    #     patch = patch.transpose(1, 2, 0)
-    #     patch = cv2.resize(patch, (int(h / 4), int(w / 4)))
-    #     patch = patch.transpose(2, 1, 0)
-    #     patch = torch.from_numpy(patch)
-    #     Os[i, :, :, :] = patch
+    Os = torch.zeros((b, c, int(h / 4), int(w / 4)))
+    first_frame = Fs[:, :, 0]
+    first_mask = Ms[:, :, 0]
+    first_frame = first_frame * first_mask.repeat(1, 3, 1, 1).type(torch.float)
+    for i in range(b):
+        mask_ = first_mask[i]
+        mask_ = mask_.squeeze(0).cpu().numpy().astype(np.uint8)
+        x, y, w_, h_ = cv2.boundingRect(mask_)
+        patch = first_frame[i, :, y:(y + h_), x:(x + w_)].cpu().numpy()
+        patch = patch.transpose(1, 2, 0)
+        patch = cv2.resize(patch, (int(h / 4), int(w / 4)))
+        patch = patch.transpose(2, 1, 0)
+        patch = torch.from_numpy(patch)
+        Os[i, :, :, :] = patch
 
     loss_video = torch.tensor(0.0).cuda()
 
@@ -127,8 +127,8 @@ def Run_video(model, Fs, Ms, num_frames, Mem_every=None, Mem_number=None, mode='
             this_values_m = torch.cat([values, pre_value], dim=2)
 
         # segment
-        # logits, p_m2, p_m3 = model([Fs[:, :, t], Os, this_keys_m, this_values_m])  # B 2 h w
-        logits, p_m2, p_m3 = model([Fs[:, :, t], this_keys_m, this_values_m])
+        logits, p_m2, p_m3 = model([Fs[:, :, t], Os, this_keys_m, this_values_m])  # B 2 h w
+        # logits, p_m2, p_m3 = model([Fs[:, :, t], this_keys_m, this_values_m])
         em = F.softmax(logits, dim=1)[:, 1]  # B h w
         Es[:, 0, t] = em
 

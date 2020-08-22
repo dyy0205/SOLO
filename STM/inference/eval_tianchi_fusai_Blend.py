@@ -415,9 +415,13 @@ def blend_results(tmp_dir, merge_dir, data_dir):
     print('Blending results...')
     img_root = os.path.join(data_dir, 'JPEGImages')
     ann_root = os.path.join(data_dir, 'Annotations')
-    with open(os.path.join(data_dir, 'ImageSets/test.txt')) as f:
-        test = f.readlines()
-    test = [img.strip() for img in test]
+    # with open(os.path.join(data_dir, 'ImageSets/test.txt')) as f:
+    #     test = f.readlines()
+    # test = [img.strip() for img in test]
+    test = os.listdir(tmp_dir)
+    test = [name.split('_')[0] if '_' in name else name for name in test]
+    test = np.unique(test)
+
     print('test videos: ', len(test))
 
     ins_lst = os.listdir(tmp_dir)
@@ -592,7 +596,7 @@ def get_tmp_match_lst(tmp_dir, ins_lst, iou_thr=0.5):
 
 
 if __name__ == '__main__':
-    mode = 'online'
+    mode = 'offline'
     if mode == 'online':
         DATA_ROOT = '/workspace/user_data/data'
         IMG_ROOT = '/tcdata'
@@ -606,7 +610,7 @@ if __name__ == '__main__':
         TEMPLATE_MASK = r'/workspace/user_data/template_data/00001.png'
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
-        IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
+        IMG_ROOT = '/workspace/dataset/VOS/fusai_train/JPEGImages/'
         MODEL_PATH = '/workspace/solo/code/user_data/model_data/dyy_ckpt_124e.pth'
         SAVE_PATH = '/workspace/solo/code/user_data/'
         TMP_PATH = '/workspace/solo/code/user_data/tmp_data'
@@ -618,7 +622,7 @@ if __name__ == '__main__':
         VIDEO_PATH = '/workspace/solo/code/user_data/video_data'
         GT_PATH = r'/workspace/dataset/VOS/fusai_train/Annotations/'
 
-        process_tianchi_dir(SAVE_PATH)
+        # process_tianchi_dir(SAVE_PATH)
 
     if IMG_ROOT is not None or IMG_ROOT != '':
         process_data_root(DATA_ROOT, IMG_ROOT)
@@ -632,10 +636,10 @@ if __name__ == '__main__':
     MAX_NUM = 8
     IOU1 = 0.5
     IOU2 = 0.1
-    BLEND_IOU_THR = 0.5
+    BLEND_IOU_THR = 1
 
-    generate_imagesets()
-    vos_inference()
+    # generate_imagesets()
+    # vos_inference()
     blend_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
     zip_result(MERGE_PATH, SAVE_PATH)
 
