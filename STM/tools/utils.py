@@ -39,7 +39,7 @@ class Conv2dDynamicSamePadding(nn.Conv2d):
         super().__init__(in_channels, out_channels, kernel_size, stride, 0, dilation, groups, bias)
         self.stride = self.stride if len(self.stride) == 2 else [self.stride[0]] * 2
 
-    def forward(self, x):
+    def forward(self, x, weight):
         ih, iw = x.size()[-2:]
         kh, kw = self.weight.size()[-2:]
         sh, sw = self.stride
@@ -48,5 +48,5 @@ class Conv2dDynamicSamePadding(nn.Conv2d):
         pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
         if pad_h > 0 or pad_w > 0:
             x = F.pad(x, [pad_w // 2, pad_w - pad_w // 2, pad_h // 2, pad_h - pad_h // 2])
-        return F.conv2d(x, self.weight.to(x.device), self.bias.to(x.device),
+        return F.conv2d(x, weight, self.bias.to(x.device),
                         self.stride, self.padding, self.dilation, self.groups)

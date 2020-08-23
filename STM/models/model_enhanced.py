@@ -256,7 +256,7 @@ class STM(nn.Module):
         f = torch.zeros(b, 1, h, w).cuda()
         for i in range(b):
             # y = F.conv2d(r4[i].unsqueeze(0), t4[i].unsqueeze(0), padding=(3, 3))
-            y = Conv2d(r4[i].unsqueeze(0))
+            y = Conv2d(r4[i].unsqueeze(0), t4[i].unsqueeze(0))
             f[i] = y
         r4 = torch.cat([r4, f], dim=1)
         curKey, curValue = self.KV_Q(r4)  # 1, dim, H/16, W/16
