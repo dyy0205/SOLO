@@ -159,8 +159,9 @@ def Run_video_enhanced(model, Fs, Ms, num_frames, Mem_every=None, Mem_number=Non
     Es = torch.zeros((b, 1, t, h, w)).float().cuda()  # [1,1,50,480,864][b,c,t,h,w]
     Es[:, :, 0] = Ms[:, :, 0]
 
-    template_size = 7 * 16
-    Os = torch.zeros((b, c, template_size, template_size))
+    # template_size = 7 * 16
+    # Os = torch.zeros((b, c, template_size, template_size))
+    Os = torch.zeros((b, c, int(h / 4), int(w / 4)))
     first_frame = Fs[:, :, 0].detach()
     first_mask = Ms[:, :, 0].detach()
     first_frame = first_frame * first_mask.repeat(1, 3, 1, 1).type(torch.float)
@@ -171,8 +172,10 @@ def Run_video_enhanced(model, Fs, Ms, num_frames, Mem_every=None, Mem_number=Non
         x, y, w_, h_ = cv2.boundingRect(mask_)
         patch = first_frame[i, :, y:(y + h_), x:(x + w_)].cpu().numpy()
         patch = patch.transpose(1, 2, 0)
-        patch = cv2.resize(patch, (template_size, template_size))
-        patch = patch.transpose(2, 1, 0)
+        # patch = cv2.resize(patch, (template_size, template_size))
+        # patch = patch.transpose(2, 1, 0)
+        patch = cv2.resize(patch, (int(w / 4), int(h / 4)))
+        patch = patch.transpose(2, 0, 1)
         patch = torch.from_numpy(patch)
         Os[i, :, :, :] = patch
 
@@ -201,23 +204,20 @@ def Run_video_enhanced(model, Fs, Ms, num_frames, Mem_every=None, Mem_number=Non
             keys, values = this_keys_m, this_values_m
 
         #  calculate loss on cuda
-        if mode == 'train':
+        if mode == 'train' or mode == 'val':
             Ms_cuda = Ms[:, 0, t].cuda()
             loss_video += (_loss(logits, Ms_cuda) + 0.5 * _loss(p_m2, Ms_cuda) + 0.25 * _loss(p_m3, Ms_cuda))
 
     #  calculate mIOU on cuda
     pred = torch.round(Es.float().cuda())
-    if mode == 'train':
+    if mode == 'train' or mode == 'val':
         video_mIoU = 0
         for n in range(len(Ms)):  # Nth batch
-            video_mIoU = video_mIoU + get_video_mIoU(pred[n], Ms[n].cuda())  # mIOU of video(t frames) for each batch
+            video_mIoU = video_mIoU + get_video_mIoU(pred[n], Ms[n].float().cuda())  # mIOU of video(t frames) for each batch
         video_mIoU = video_mIoU / len(Ms)  # mean IoU among batch
 
-    loss_video /= num_frames
+        return loss_video / num_frames, video_mIoU
 
-    # return
-    if mode == 'train':
-        return loss_video, video_mIoU
     elif mode == 'test':
         return pred, Es
 
