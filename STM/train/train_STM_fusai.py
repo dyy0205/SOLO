@@ -61,7 +61,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_(model_name):
+def _run(model_name):
     if model_name == 'motion':
         return Run_video
     elif model_name == 'aspp':
@@ -363,18 +363,7 @@ def train(args, optimizer, train_loader, model, epochs, epoch_start=0, lr=1e-5):
             log.logger.info('val loss:{:.3f}, val miou:{:.3f}'.format(loss_val, miou_val))
 
 
-if __name__ == '__main__':
-    args = parse_args()
-
-    if not os.path.exists(args.work_dir):
-        os.makedirs(args.work_dir)
-
-    GPU = args.gpu
-    INFO_INTERVAL = args.info_interval
-    intervals = list(range(int(args.interval.split(',')[0]), int(args.interval.split(',')[1]) + 1))
-    epoch_per_interval = args.epoch_per_interval
-
-    model_name = args.model
+def _model(model_name):
     if model_name == 'motion':
         from STM.models.model_fusai import STM
         model = STM()
@@ -392,7 +381,24 @@ if __name__ == '__main__':
         model.Memory.eval()
         model.KV_M_r4.eval()
 
-    run_fun = run_(model_name)
+    return model
+
+
+if __name__ == '__main__':
+    args = parse_args()
+
+    if not os.path.exists(args.work_dir):
+        os.makedirs(args.work_dir)
+
+    GPU = args.gpu
+    INFO_INTERVAL = args.info_interval
+    intervals = list(range(int(args.interval.split(',')[0]), int(args.interval.split(',')[1]) + 1))
+    epoch_per_interval = args.epoch_per_interval
+
+    model_name = args.model
+    model = _model(model_name)
+
+    run_fun = _run(model_name)
 
     os.environ['CUDA_VISIBLE_DEVICES'] = GPU
     if torch.cuda.is_available():

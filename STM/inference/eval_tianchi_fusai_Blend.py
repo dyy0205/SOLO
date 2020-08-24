@@ -23,7 +23,7 @@ import tqdm
 import itertools
 
 ### My libs
-from STM.models.model_fusai import STM
+# from STM.models.model_fusai import STM
 from STM.dataset import TIANCHI
 from STM.tools.generate_videos import generate_videos
 from STM.dataloader.fusai_dataset import TIANCHI_FUSAI
@@ -45,30 +45,53 @@ def fn_timer(function):
     return function_timer
 
 
-def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None):
-    seg_result_idx = [i[3] for i in seg_resuls]
+def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='base'):
+    seg_result_idx = [i[3] for i in seg_results]
 
     instance_idx = 1
     b, c, T, h, w = Fs.shape
     results = []
 
-    if np.all([len(i[0]) == 0 for i in seg_resuls]):
+    if np.all([len(i[0]) == 0 for i in seg_results]):
         print('No segmentation result of solo!')
         pred = torch.zeros((b, 1, T, h, w)).float().cuda()
         return [(pred, 1)]
 
     while True:
-        if np.all([len(i[0]) == 0 for i in seg_resuls]):
+        if np.all([len(i[0]) == 0 for i in seg_results]):
             print('Run video over!')
             break
         if instance_idx > MAX_NUM:
             print('Max instance number!')
             break
-        start_frame_idx = np.argmax([max(i[2]) if i[2] != [] else 0 for i in seg_resuls])
+        start_frame_idx = np.argmax([max(i[2]) if i[2] != [] else 0 for i in seg_results])
         start_frame = seg_result_idx[start_frame_idx]
-        start_mask = seg_resuls[start_frame_idx][0][0].astype(np.uint8)
+        start_mask = seg_results[start_frame_idx][0][0].astype(np.uint8)
         # start_mask = cv2.resize(start_mask, (w, h))
         start_mask = torch.from_numpy(start_mask).cuda()
+
+        if model_name == 'enhanced':
+            Os = torch.zeros((b, c, int(h / 4), int(w / 4)))
+            first_frame = Fs[:, :, start_frame].detach()
+            first_mask = start_mask.cpu().detach()
+            if len(first_mask.shape) == 2:
+                first_mask = first_mask.unsqueeze(0).unsqueeze(0)
+            elif len(first_mask.shape) == 3:
+                first_mask = first_mask.unsqueeze(0)
+            first_frame = first_frame * first_mask.repeat(1, 3, 1, 1).type(torch.float)
+            for i in range(b):
+                mask_ = first_mask[i]
+                mask_ = mask_.squeeze(0).cpu().numpy().astype(np.uint8)
+                assert np.any(mask_)
+                x, y, w_, h_ = cv2.boundingRect(mask_)
+                patch = first_frame[i, :, y:(y + h_), x:(x + w_)].cpu().numpy()
+                patch = patch.transpose(1, 2, 0)
+                # patch = cv2.resize(patch, (template_size, template_size))
+                # patch = patch.transpose(2, 1, 0)
+                patch = cv2.resize(patch, (int(w / 4), int(h / 4)))
+                patch = patch.transpose(2, 0, 1)
+                patch = torch.from_numpy(patch)
+                Os[i, :, :, :] = patch
 
         Es = torch.zeros((b, 1, T, h, w)).float().cuda()
         Es[:, :, start_frame] = start_mask
@@ -86,39 +109,17 @@ def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None
                 this_values_m = torch.cat([values, pre_value], dim=2)
 
             # segment
-            logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1].detach()])  # B 2 h w
+            if model_name == 'enhanced':
+                logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m])
+            elif model_name in ('motion', 'aspp'):
+                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1].detach()])
+            elif model_name == 'base':
+                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m])
             em = F.softmax(logits, dim=1)[:, 1]  # B h w
             Es[:, 0, t] = em
 
             # check solo result
-            pred = torch.round(em.float())
-            if t in seg_result_idx:
-                idx = seg_result_idx.index(t)
-                this_frame_results = seg_resuls[idx]
-                masks = this_frame_results[0]
-                ious = []
-                for mask in masks:
-                    mask = mask.astype(np.uint8)
-                    mask = torch.from_numpy(mask)
-                    iou = get_video_mIoU(pred, mask)
-                    ious.append(iou)
-                if ious != []:
-                    ious = np.array(ious)
-                    reserve = list(range(len(ious)))
-                    if sum(ious >= IOU1) >= 1:
-                        same_idx = np.argmax(ious)
-                        Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
-                        reserve.remove(same_idx)
-
-                    for i, iou in enumerate(ious):
-                        if iou >= IOU2 and iou < IOU1:
-                            reserve.remove(i)
-
-                    reserve_result = []
-                    for n in range(3):
-                        reserve_result.append([this_frame_results[n][i] for i in reserve])
-                    reserve_result.append(this_frame_results[3])
-                    seg_resuls[idx] = reserve_result
+            seg_reults = filter_solo_seg_result(em, t, seg_result_idx, seg_results, Es)
 
             # update key and value
             if t - 1 in to_memorize:
@@ -138,46 +139,24 @@ def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None
                 this_values_m = torch.cat([values, pre_value], dim=2)
 
             # segment
-            logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t + 1].detach()])  # B 2 h w
+            if model_name == 'enhanced':
+                logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m])
+            elif model_name in ('motion', 'aspp'):
+                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1].detach()])
+            elif model_name == 'base':
+                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m])
             em = F.softmax(logits, dim=1)[:, 1]  # B h w
             Es[:, 0, t] = em
 
             # check solo result
-            pred = torch.round(em.float())
-            if t in seg_result_idx:
-                idx = seg_result_idx.index(t)
-                this_frame_results = seg_resuls[idx]
-                masks = this_frame_results[0]
-                ious = []
-                for mask in masks:
-                    mask = mask.astype(np.uint8)
-                    mask = torch.from_numpy(mask)
-                    iou = get_video_mIoU(pred, mask)
-                    ious.append(iou)
-                if ious != []:
-                    ious = np.array(ious)
-                    reserve = list(range(len(ious)))
-                    if sum(ious >= IOU1) >= 1:
-                        same_idx = np.argmax(ious)
-                        Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
-                        reserve.remove(same_idx)
-
-                    for i, iou in enumerate(ious):
-                        if iou >= IOU2 and iou < IOU1:
-                            reserve.remove(i)
-
-                    reserve_result = []
-                    for n in range(3):
-                        reserve_result.append([this_frame_results[n][i] for i in reserve])
-                    reserve_result.append(this_frame_results[3])
-                    seg_resuls[idx] = reserve_result
+            seg_results = filter_solo_seg_result(em, t, seg_result_idx, seg_results, Es)
 
             # update key and value
             if t + 1 in to_memorize:
                 keys, values = this_keys_m, this_values_m
 
         for j in range(3):
-            seg_resuls[start_frame_idx][j].pop(0)
+            seg_results[start_frame_idx][j].pop(0)
 
         pred = torch.round(Es.float())
         results.append((pred, instance_idx))
@@ -187,12 +166,41 @@ def Run_video(model, Fs, seg_resuls, num_frames, Mem_every=None, Mem_number=None
     return results
 
 
+def filter_solo_seg_result(em, t, seg_result_idx, seg_results, Es):
+    pred = torch.round(em.float())
+    if t in seg_result_idx:
+        idx = seg_result_idx.index(t)
+        this_frame_results = seg_results[idx]
+        masks = this_frame_results[0]
+        ious = []
+        for mask in masks:
+            mask = mask.astype(np.uint8)
+            mask = torch.from_numpy(mask)
+            iou = get_video_mIoU(pred, mask)
+            ious.append(iou)
+        if ious != []:
+            ious = np.array(ious)
+            reserve = list(range(len(ious)))
+            if sum(ious >= IOU1) >= 1:
+                same_idx = np.argmax(ious)
+                Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
+                reserve.remove(same_idx)
+
+            for i, iou in enumerate(ious):
+                if iou >= IOU2 and iou < IOU1:
+                    reserve.remove(i)
+
+            reserve_result = []
+            for n in range(3):
+                reserve_result.append([this_frame_results[n][i] for i in reserve])
+            reserve_result.append(this_frame_results[3])
+            seg_results[idx] = reserve_result
+    return seg_results
+
+
 @fn_timer
 def vos_inference():
     # Model and version
-    MODEL = 'STM'
-    print(MODEL, ': Testing on TIANCHI...')
-
     if torch.cuda.is_available():
         print('using Cuda devices, num:', torch.cuda.device_count())
 
@@ -200,7 +208,7 @@ def vos_inference():
     print('Total test videos: {}'.format(len(Testset)))
     Testloader = data.DataLoader(Testset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 
-    model = nn.DataParallel(STM())
+    model = nn.DataParallel(MODEL)
     if torch.cuda.is_available():
         model.cuda()
     model.eval()  # turn-off BN
@@ -235,7 +243,7 @@ def vos_inference():
 
         print('[{}]: num_frames: {}'.format(seq_name, num_frames))
 
-        results = Run_video(model, Fs, seg_results, num_frames, Mem_every=5)
+        results = Run_video(model, Fs, seg_results, num_frames, Mem_every=5, model_name=MODEL_NAME)
 
         for result in results:
             pred, instance = result
@@ -595,12 +603,27 @@ def get_tmp_match_lst(tmp_dir, ins_lst, iou_thr=0.5):
     return match_lst
 
 
+def _model(model_name):
+    if model_name == 'motion':
+        from STM.models.model_fusai import STM
+        model = STM()
+    elif model_name == 'aspp':
+        from STM.models.model_fusai_aspp import STM
+        model = STM()
+    elif model_name == 'enhanced':
+        from STM.models.model_enhanced import STM
+        model = STM()
+
+    return model
+
+
 if __name__ == '__main__':
-    mode = 'offline'
+    mode = 'online'
     if mode == 'online':
         DATA_ROOT = '/workspace/user_data/data'
         IMG_ROOT = '/tcdata'
-        MODEL_PATH = '/workspace/user_data/model_data/dyy_ckpt_124e.pth'
+        # MODEL_PATH = '/workspace/user_data/model_data/dyy_ckpt_124e.pth'
+        MODEL_PATH = '/workspace/user_data/model_data/motion_crop_ckpt_44e.pth'
         SAVE_PATH = '/workspace'
         TMP_PATH = '/workspace/user_data/tmp_data'
         MERGE_PATH = '/workspace/user_data/merge_data'
@@ -608,10 +631,14 @@ if __name__ == '__main__':
         CONFIG_FILE = r'/workspace/cfg/aug_solov2_r101.py'
         CKPT_FILE = r'/workspace/user_data/model_data/solov2_9cls.pth'
         TEMPLATE_MASK = r'/workspace/user_data/template_data/00001.png'
+
+        MODEL_NAME = 'aspp'
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
-        IMG_ROOT = '/workspace/dataset/VOS/fusai_train/JPEGImages/'
-        MODEL_PATH = '/workspace/solo/code/user_data/model_data/dyy_ckpt_124e.pth'
+        IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
+        # MODEL_PATH = '/workspace/solo/code/user_data/model_data/dyy_ckpt_124e.pth'
+        MODEL_PATH = '/workspace/solo/backup_models/motion_crop_ckpt_44e.pth'
+        # MODEL_PATH = '/workspace/solo/backup_models/enhanced_ckpt_9e.pth'
         SAVE_PATH = '/workspace/solo/code/user_data/'
         TMP_PATH = '/workspace/solo/code/user_data/tmp_data'
         MERGE_PATH = '/workspace/solo/code/user_data/merge_data'
@@ -622,15 +649,20 @@ if __name__ == '__main__':
         VIDEO_PATH = '/workspace/solo/code/user_data/video_data'
         GT_PATH = r'/workspace/dataset/VOS/fusai_train/Annotations/'
 
-        # process_tianchi_dir(SAVE_PATH)
+        MODEL_NAME = 'aspp'
+
+        process_tianchi_dir(SAVE_PATH)
+
+    MODEL = _model(MODEL_NAME)
 
     if IMG_ROOT is not None or IMG_ROOT != '':
         process_data_root(DATA_ROOT, IMG_ROOT)
-    # check_data_root(DATA_ROOT)
+
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
     TARGET_SHAPE = (1008, 560)
+    # TARGET_SHAPE = (864, 480)
     SCORE_THR = 0.5
     SOLO_INTERVAL = 2
     MAX_NUM = 8
@@ -638,8 +670,8 @@ if __name__ == '__main__':
     IOU2 = 0.1
     BLEND_IOU_THR = 1
 
-    # generate_imagesets()
-    # vos_inference()
+    generate_imagesets()
+    vos_inference()
     blend_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
     zip_result(MERGE_PATH, SAVE_PATH)
 
