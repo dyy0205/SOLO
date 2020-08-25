@@ -5,6 +5,7 @@ import numpy as np
 
 
 def generate_videos(data_root, ann_root, save_dir):
+    print('Generating videos...')
     img_root = os.path.join(data_root, 'JPEGImages')
     rq = datetime.datetime.strftime(datetime.datetime.now(), '%m%d%H%M')
     code = 'STM'

@@ -72,8 +72,8 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='ba
 
         if model_name == 'enhanced':
             Os = torch.zeros((b, c, int(h / 4), int(w / 4)))
-            first_frame = Fs[:, :, start_frame].detach()
-            first_mask = start_mask.cpu().detach()
+            first_frame = Fs[:, :, start_frame]
+            first_mask = start_mask.cpu()
             if len(first_mask.shape) == 2:
                 first_mask = first_mask.unsqueeze(0).unsqueeze(0)
             elif len(first_mask.shape) == 3:
@@ -86,8 +86,6 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='ba
                 x, y, w_, h_ = cv2.boundingRect(mask_)
                 patch = first_frame[i, :, y:(y + h_), x:(x + w_)].cpu().numpy()
                 patch = patch.transpose(1, 2, 0)
-                # patch = cv2.resize(patch, (template_size, template_size))
-                # patch = patch.transpose(2, 1, 0)
                 patch = cv2.resize(patch, (int(w / 4), int(h / 4)))
                 patch = patch.transpose(2, 0, 1)
                 patch = torch.from_numpy(patch)
@@ -111,15 +109,19 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='ba
             # segment
             if model_name == 'enhanced':
                 logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m])
-            elif model_name in ('motion', 'aspp'):
-                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1].detach()])
+            elif model_name == 'motion':
+                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1]])
+            elif model_name == 'aspp':
+                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, torch.round(Es[:, :, t - 1])])
             elif model_name == 'base':
                 logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m])
+            else:
+                raise NotImplementedError
             em = F.softmax(logits, dim=1)[:, 1]  # B h w
             Es[:, 0, t] = em
 
             # check solo result
-            seg_reults = filter_solo_seg_result(em, t, seg_result_idx, seg_results, Es)
+            seg_results = filter_solo_seg_result(em, t, seg_result_idx, seg_results, Es)
 
             # update key and value
             if t - 1 in to_memorize:
@@ -141,10 +143,14 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='ba
             # segment
             if model_name == 'enhanced':
                 logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m])
-            elif model_name in ('motion', 'aspp'):
-                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1].detach()])
+            elif model_name == 'motion':
+                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1]])
+            elif model_name == 'aspp':
+                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, torch.round(Es[:, :, t + 1])])
             elif model_name == 'base':
                 logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m])
+            else:
+                raise NotImplementedError
             em = F.softmax(logits, dim=1)[:, 1]  # B h w
             Es[:, 0, t] = em
 
@@ -462,7 +468,6 @@ def blend_results(tmp_dir, merge_dir, data_dir):
                     flag = True
         print('Match tmp instance: {}'.format(match_dict))
 
-
         video_dir = os.path.join(merge_dir, name)
         if not os.path.exists(video_dir):
             os.makedirs(video_dir)
@@ -491,7 +496,7 @@ def blend_results(tmp_dir, merge_dir, data_dir):
                 mask.putpalette(palette)
                 mask.save(os.path.join(video_dir, '{}.png'.format(VIDEO_FRAMES[name][t])))
 
-
+@fn_timer
 def zip_result(result_dir, save_path):
     print('Generating zip file...')
     f = zipfile.ZipFile(os.path.join(save_path, 'result.zip'), 'w', zipfile.ZIP_DEFLATED)
@@ -623,7 +628,7 @@ if __name__ == '__main__':
         DATA_ROOT = '/workspace/user_data/data'
         IMG_ROOT = '/tcdata'
         # MODEL_PATH = '/workspace/user_data/model_data/dyy_ckpt_124e.pth'
-        MODEL_PATH = '/workspace/user_data/model_data/motion_crop_ckpt_44e.pth'
+        MODEL_PATH = '/workspace/user_data/model_data/enhanced_ckpt_79e.pth'
         SAVE_PATH = '/workspace'
         TMP_PATH = '/workspace/user_data/tmp_data'
         MERGE_PATH = '/workspace/user_data/merge_data'
@@ -632,13 +637,13 @@ if __name__ == '__main__':
         CKPT_FILE = r'/workspace/user_data/model_data/solov2_9cls.pth'
         TEMPLATE_MASK = r'/workspace/user_data/template_data/00001.png'
 
-        MODEL_NAME = 'aspp'
+        MODEL_NAME = 'enhanced'
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
         IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
         # MODEL_PATH = '/workspace/solo/code/user_data/model_data/dyy_ckpt_124e.pth'
-        MODEL_PATH = '/workspace/solo/backup_models/motion_crop_ckpt_44e.pth'
-        # MODEL_PATH = '/workspace/solo/backup_models/enhanced_ckpt_9e.pth'
+        # MODEL_PATH = '/workspace/solo/backup_models/motion_crop_ckpt_44e.pth' # aspp + motion
+        MODEL_PATH = '/workspace/solo/backup_models/enhanced_ckpt_79e.pth'
         SAVE_PATH = '/workspace/solo/code/user_data/'
         TMP_PATH = '/workspace/solo/code/user_data/tmp_data'
         MERGE_PATH = '/workspace/solo/code/user_data/merge_data'
@@ -649,7 +654,7 @@ if __name__ == '__main__':
         VIDEO_PATH = '/workspace/solo/code/user_data/video_data'
         GT_PATH = r'/workspace/dataset/VOS/fusai_train/Annotations/'
 
-        MODEL_NAME = 'aspp'
+        MODEL_NAME = 'enhanced'
 
         process_tianchi_dir(SAVE_PATH)
 
@@ -673,9 +678,9 @@ if __name__ == '__main__':
     generate_imagesets()
     vos_inference()
     blend_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
-    zip_result(MERGE_PATH, SAVE_PATH)
-
-    if mode != 'online':
+    if mode == 'online':
+        zip_result(MERGE_PATH, SAVE_PATH)
+    else:
         generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
-        miou, num = calculate_videos_miou(MERGE_PATH, GT_PATH)
-        print('offline evaluation miou: {}, {} videos counted'.format(miou, num))
+        miou, num, miou2 = calculate_videos_miou(MERGE_PATH, GT_PATH)
+        print('offline evaluation miou: {:.3f}, instances miou: {:.3f}, {} videos counted'.format(miou, miou2, num))

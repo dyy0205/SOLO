@@ -5,21 +5,26 @@ import time
 
 
 def calculate_videos_miou(pred_dir, ann_dir):
+    print('Calculating video miou...')
     preds = os.listdir(pred_dir)
     anns = os.listdir(ann_dir)
     ious = []
-    for pred in preds:
+    ins_ious = []
+    for i, pred in enumerate(preds):
         if pred not in anns:
             print('{} have no groundtruth!'.format(pred))
         else:
             st = time.time()
-            iou = get_video_miou(os.path.join(pred_dir, pred), os.path.join(ann_dir, pred))
+            iou, result = get_video_miou(os.path.join(pred_dir, pred), os.path.join(ann_dir, pred))
             ed = time.time()
-            print('video: {}, cost time: {:.2f}s'.format(pred, ed - st))
+            print('{}, video: {}, iou: {:.2f}, cost time: {:.2f}s'.format(i, pred, iou, ed - st))
+            print()
             ious.append(iou)
+            ins_ious.extend(result)
     miou = np.mean(ious)
+    miou_2 = np.mean(ins_ious)
     num_cal = len(ious)
-    return miou, num_cal
+    return miou, num_cal, miou_2
 
 
 def get_video_miou(video_dir, gt_dir):
@@ -73,7 +78,7 @@ def get_video_miou(video_dir, gt_dir):
                 print(g, k, best_iou)
         result.append(best_iou)
 
-    return np.mean(result)
+    return np.mean(result), result
 
 
 def IOU(gt, pred, eps=1e-5):
