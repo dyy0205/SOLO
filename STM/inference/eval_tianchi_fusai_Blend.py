@@ -121,11 +121,39 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='ba
             Es[:, 0, t] = em
 
             # check solo result
-            seg_results = filter_solo_seg_result(em, t, seg_result_idx, seg_results, Es)
+            pred = torch.round(em.float())
+            if t in seg_result_idx:
+                idx = seg_result_idx.index(t)
+                this_frame_results = seg_results[idx]
+                masks = this_frame_results[0]
+                ious = []
+                for mask in masks:
+                    mask = mask.astype(np.uint8)
+                    mask = torch.from_numpy(mask)
+                    iou = get_video_mIoU(pred, mask)
+                    ious.append(iou)
+                if ious != []:
+                    ious = np.array(ious)
+                    reserve = list(range(len(ious)))
+                    if sum(ious >= IOU1) >= 1:
+                        same_idx = np.argmax(ious)
+                        Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
+                        reserve.remove(same_idx)
+
+                    for i, iou in enumerate(ious):
+                        if iou >= IOU2 and iou < IOU1:
+                            reserve.remove(i)
+
+                    reserve_result = []
+                    for n in range(3):
+                        reserve_result.append([this_frame_results[n][i] for i in reserve])
+                    reserve_result.append(this_frame_results[3])
+                    seg_results[idx] = reserve_result
 
             # update key and value
             if t - 1 in to_memorize:
                 keys, values = this_keys_m, this_values_m
+
 
         to_memorize = [start_frame - int(i) for i in np.arange(0, start_frame + 1, step=Mem_every)]
         for t in list(range(0, start_frame))[::-1]:  # frames before
@@ -155,7 +183,34 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='ba
             Es[:, 0, t] = em
 
             # check solo result
-            seg_results = filter_solo_seg_result(em, t, seg_result_idx, seg_results, Es)
+            pred = torch.round(em.float())
+            if t in seg_result_idx:
+                idx = seg_result_idx.index(t)
+                this_frame_results = seg_results[idx]
+                masks = this_frame_results[0]
+                ious = []
+                for mask in masks:
+                    mask = mask.astype(np.uint8)
+                    mask = torch.from_numpy(mask)
+                    iou = get_video_mIoU(pred, mask)
+                    ious.append(iou)
+                if ious != []:
+                    ious = np.array(ious)
+                    reserve = list(range(len(ious)))
+                    if sum(ious >= IOU1) >= 1:
+                        same_idx = np.argmax(ious)
+                        Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
+                        reserve.remove(same_idx)
+
+                    for i, iou in enumerate(ious):
+                        if iou >= IOU2 and iou < IOU1:
+                            reserve.remove(i)
+
+                    reserve_result = []
+                    for n in range(3):
+                        reserve_result.append([this_frame_results[n][i] for i in reserve])
+                    reserve_result.append(this_frame_results[3])
+                    seg_results[idx] = reserve_result
 
             # update key and value
             if t + 1 in to_memorize:
@@ -170,38 +225,6 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='ba
         instance_idx += 1
 
     return results
-
-
-def filter_solo_seg_result(em, t, seg_result_idx, seg_results, Es):
-    pred = torch.round(em.float())
-    if t in seg_result_idx:
-        idx = seg_result_idx.index(t)
-        this_frame_results = seg_results[idx]
-        masks = this_frame_results[0]
-        ious = []
-        for mask in masks:
-            mask = mask.astype(np.uint8)
-            mask = torch.from_numpy(mask)
-            iou = get_video_mIoU(pred, mask)
-            ious.append(iou)
-        if ious != []:
-            ious = np.array(ious)
-            reserve = list(range(len(ious)))
-            if sum(ious >= IOU1) >= 1:
-                same_idx = np.argmax(ious)
-                Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
-                reserve.remove(same_idx)
-
-            for i, iou in enumerate(ious):
-                if iou >= IOU2 and iou < IOU1:
-                    reserve.remove(i)
-
-            reserve_result = []
-            for n in range(3):
-                reserve_result.append([this_frame_results[n][i] for i in reserve])
-            reserve_result.append(this_frame_results[3])
-            seg_results[idx] = reserve_result
-    return seg_results
 
 
 @fn_timer
@@ -423,7 +446,6 @@ def analyse_images(data_root):
     return v_frames
 
 
-# TODO: another blend result method.
 @fn_timer
 def blend_results(tmp_dir, merge_dir, data_dir):
     print('Blending results...')
@@ -666,9 +688,9 @@ if __name__ == '__main__':
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
-    TARGET_SHAPE = (1008, 560)
-    # TARGET_SHAPE = (864, 480)
-    SCORE_THR = 0.5
+    # TARGET_SHAPE = (1008, 560)
+    TARGET_SHAPE = (864, 480)
+    SCORE_THR = 0.3
     SOLO_INTERVAL = 2
     MAX_NUM = 8
     IOU1 = 0.5

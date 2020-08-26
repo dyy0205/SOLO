@@ -71,7 +71,7 @@ class TIANCHI(data.Dataset):
 
     def __init__(self, root, phase='train', imset='2016/val.txt', separate_instance=False, only_single=False,
                  target_size=(864, 480), crop_size=(512, 512), clip_size=3, only_multiple=False, mode='sample',
-                 interval=1, same_frames=False, train_aug=False):
+                 interval=1, same_frames=False, train_aug=False, keep_one_prev=False):
         assert phase in ['train', 'test', 'val']
         self.phase = phase
         self.root = root
@@ -89,6 +89,7 @@ class TIANCHI(data.Dataset):
         assert not (self.OM and self.OS)
         assert mode in ('sample', 'sequence')
         self.same_frames = same_frames
+        self.keep_one_prev = keep_one_prev
 
         self.mask_dir = os.path.join(root, 'Annotations')
         self.image_dir = os.path.join(root, 'JPEGImages')
@@ -211,14 +212,22 @@ class TIANCHI(data.Dataset):
                 temp = np.array(Image.open(mask_file).convert('P'), dtype=np.uint8)
                 if (temp == object_label).sum() > 0:
                     break
-            frames_num = [start_frame + i * self.interval for i in range(final_clip_size)]
+            if not self.keep_one_prev:
+                frames_num = [start_frame + i * self.interval for i in range(final_clip_size)]
+            else:
+                frames_num = [start_frame + i * self.interval for i in range(final_clip_size - 1)]
+                frames_num.append(frames_num[-1] + 1)
             frames_num = [min(self.num_frames[video] - 1, fn) for fn in frames_num]
         elif self.same_frames:
             frames_num = list(range(self.num_frames[video]))
         else:
             frames_num = list(range(final_clip_size))
 
+        intervals = [0]
+        for i in range(1, final_clip_size):
+            intervals.append(frames_num[i] - frames_num[i - 1])
         info['frames'] = frames_num
+        info['intervals'] = intervals
 
         for f in range(len(frames_num)):
             info['valid_frames'][f] = 1
@@ -327,7 +336,6 @@ class TIANCHI(data.Dataset):
         images_aug = seq_f.augment_images(images=images_aug)
 
         return images_aug, masks_aug
-
 
 # class TIANCHI_Stage1(data.Dataset):
 #     '''
