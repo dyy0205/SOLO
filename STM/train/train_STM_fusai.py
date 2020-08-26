@@ -61,16 +61,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def _run(model_name):
-    if model_name == 'motion':
-        return Run_video
-    elif model_name == 'aspp':
-        return Run_video
-    elif model_name == 'enhanced':
-        return Run_video_enhanced
-
-
-def Run_video(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'):
+def Run_video_motion(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'):
     num_frames = info['num_frames'][0].item()
     intervals = info['intervals']
     if Mem_every:
@@ -89,10 +80,11 @@ def Run_video(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'
 
     for t in range(1, num_frames):
         interval = intervals[t][0].item()
-        if interval != 1:
-            model.module.Memory.eval()
-        else:
-            model.module.Memory.train()
+        if mode == 'train':
+            if interval != 1:
+                model.module.Memory.eval()
+            else:
+                model.module.Memory.train()
         # memorize
         pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
         pre_key = pre_key.unsqueeze(2)
@@ -134,6 +126,63 @@ def Run_video(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'
         return pred, Es
 
 
+def Run_video_standard(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'):
+    num_frames = info['num_frames'][0].item()
+    if Mem_every:
+        to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
+    elif Mem_number:
+        to_memorize = [int(round(i)) for i in np.linspace(0, num_frames, num=Mem_number + 2)[:-1]]
+    else:
+        raise NotImplementedError
+
+    B, _, f, H, W = Fs.shape
+    Es = torch.zeros((B, 1, f, H, W)).float().cuda()  # [1,1,50,480,864][b,c,t,h,w]
+    Es[:, :, 0] = Ms[:, :, 0]
+
+    loss_video = torch.tensor(0.0).cuda()
+    loss_total = torch.tensor(0.0).cuda()
+
+    for t in range(1, num_frames):
+        # memorize
+        pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
+        pre_key = pre_key.unsqueeze(2)
+        pre_value = pre_value.unsqueeze(2)
+
+        if t - 1 == 0:  # the first frame
+            this_keys_m, this_values_m = pre_key, pre_value
+        else:  # other frame
+            this_keys_m = torch.cat([keys, pre_key], dim=2)
+            this_values_m = torch.cat([values, pre_value], dim=2)
+
+        # segment
+        logits, p_m2, p_m3 = model([Fs[:, :, t], this_keys_m, this_values_m])
+        em = F.softmax(logits, dim=1)[:, 1]  # B h w
+        Es[:, 0, t] = em
+
+        #  calculate loss on cuda
+        if mode == 'train' or mode == 'val':
+            Ms_cuda = Ms[:, 0, t].cuda()
+            loss_video += _loss(logits, Ms_cuda) + 0.5 * _loss(p_m2, Ms_cuda) + 0.25 * _loss(p_m3, Ms_cuda)
+            loss_total = loss_video
+
+        # update key and value
+        if t - 1 in to_memorize:
+            keys, values = this_keys_m, this_values_m
+
+    #  calculate mIOU on cuda
+    pred = torch.round(Es.float().cuda())
+    if mode == 'train' or mode == 'val':
+        video_mIoU = 0
+        for n in range(len(Ms)):  # Nth batch
+            video_mIoU = video_mIoU + get_video_mIoU(pred[n], Ms[n].cuda())  # mIOU of video(t frames) for each batch
+        video_mIoU = video_mIoU / len(Ms)  # mean IoU among batch
+
+        return loss_total / num_frames, video_mIoU
+
+    elif mode == 'test':
+        return pred, Es
+
+
 def Run_video_enhanced(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'):
     num_frames = info['num_frames'][0].item()
     if Mem_every:
@@ -143,8 +192,8 @@ def Run_video_enhanced(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mod
     else:
         raise NotImplementedError
 
-    b, c, t, h, w = Fs.shape
-    Es = torch.zeros((b, 1, t, h, w)).float().cuda()  # [1,1,50,480,864][b,c,t,h,w]
+    b, c, f, h, w = Fs.shape
+    Es = torch.zeros((b, 1, f, h, w)).float().cuda()  # [1,1,50,480,864][b,c,t,h,w]
     Es[:, :, 0] = Ms[:, :, 0]
 
     # template_size = 7 * 16
@@ -200,10 +249,94 @@ def Run_video_enhanced(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mod
     if mode == 'train' or mode == 'val':
         video_mIoU = 0
         for n in range(len(Ms)):  # Nth batch
-            video_mIoU = video_mIoU + get_video_mIoU(pred[n], Ms[n].float().cuda())  # mIOU of video(t frames) for each batch
+            video_mIoU = video_mIoU + get_video_mIoU(pred[n],
+                                                     Ms[n].float().cuda())  # mIOU of video(t frames) for each batch
         video_mIoU = video_mIoU / len(Ms)  # mean IoU among batch
 
         return loss_video / num_frames, video_mIoU
+
+    elif mode == 'test':
+        return pred, Es
+
+
+def Run_video_motion_enhanced(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'):
+    num_frames = info['num_frames'][0].item()
+    intervals = info['intervals']
+    if Mem_every:
+        to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
+    elif Mem_number:
+        to_memorize = [int(round(i)) for i in np.linspace(0, num_frames, num=Mem_number + 2)[:-1]]
+    else:
+        raise NotImplementedError
+
+    b, c, f, h, w = Fs.shape
+    Es = torch.zeros((b, 1, f, h, w)).float().cuda()  # [1,1,50,480,864][b,c,t,h,w]
+    Es[:, :, 0] = Ms[:, :, 0]
+
+    loss_video = torch.tensor(0.0).cuda()
+    loss_total = torch.tensor(0.0).cuda()
+
+    Os = torch.zeros((b, c, int(h / 4), int(w / 4)))
+    first_frame = Fs[:, :, 0].detach()
+    first_mask = Ms[:, :, 0].detach()
+    first_frame = first_frame * first_mask.repeat(1, 3, 1, 1).type(torch.float)
+    for i in range(b):
+        mask_ = first_mask[i]
+        mask_ = mask_.squeeze(0).cpu().numpy().astype(np.uint8)
+        assert np.any(mask_)
+        x, y, w_, h_ = cv2.boundingRect(mask_)
+        patch = first_frame[i, :, y:(y + h_), x:(x + w_)].cpu().numpy()
+        patch = patch.transpose(1, 2, 0)
+        # patch = cv2.resize(patch, (template_size, template_size))
+        # patch = patch.transpose(2, 1, 0)
+        patch = cv2.resize(patch, (int(w / 4), int(h / 4)))
+        patch = patch.transpose(2, 0, 1)
+        patch = torch.from_numpy(patch)
+        Os[i, :, :, :] = patch
+
+    for t in range(1, num_frames):
+        interval = intervals[t][0].item()
+        if mode == 'train':
+            if interval != 1:
+                model.module.Memory.eval()
+            else:
+                model.module.Memory.train()
+        # memorize
+        pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
+        pre_key = pre_key.unsqueeze(2)
+        pre_value = pre_value.unsqueeze(2)
+
+        if t - 1 == 0:  # the first frame
+            this_keys_m, this_values_m = pre_key, pre_value
+        else:  # other frame
+            this_keys_m = torch.cat([keys, pre_key], dim=2)
+            this_values_m = torch.cat([values, pre_value], dim=2)
+
+        # segment
+        prev_mask = torch.round(Es[:, :, t - 1].detach()).float()
+        logits, p_m2, p_m3 = model([Fs[:, :, t], Os, this_keys_m, this_values_m, prev_mask])
+        em = F.softmax(logits, dim=1)[:, 1]  # B h w
+        Es[:, 0, t] = em
+
+        #  calculate loss on cuda
+        if mode == 'train' or mode == 'val':
+            Ms_cuda = Ms[:, 0, t].cuda()
+            loss_video += _loss(logits, Ms_cuda) + 0.5 * _loss(p_m2, Ms_cuda) + 0.25 * _loss(p_m3, Ms_cuda)
+            loss_total = loss_video
+
+        # update key and value
+        if t - 1 in to_memorize:
+            keys, values = this_keys_m, this_values_m
+
+    #  calculate mIOU on cuda
+    pred = torch.round(Es.float().cuda())
+    if mode == 'train' or mode == 'val':
+        video_mIoU = 0
+        for n in range(len(Ms)):  # Nth batch
+            video_mIoU = video_mIoU + get_video_mIoU(pred[n], Ms[n].cuda())  # mIOU of video(t frames) for each batch
+        video_mIoU = video_mIoU / len(Ms)  # mean IoU among batch
+
+        return loss_total / num_frames, video_mIoU
 
     elif mode == 'test':
         return pred, Es
@@ -283,7 +416,6 @@ def train(args, optimizer, train_loader, model, epochs, epoch_start=0, lr=1e-5):
 
     # optimizer = torch.optim.SGD(model.parameters(), lr, momentum=0.9, weight_decay=1e-4)
 
-
     for epoch in range(epoch_start, epochs):
         model.train()
         # turn-off BN
@@ -312,7 +444,7 @@ def train(args, optimizer, train_loader, model, epochs, epoch_start=0, lr=1e-5):
             loss_record += loss_video.cpu().detach().numpy()
             loss_total += loss_video.cpu().detach().numpy()
             miou_record += video_mIou
-            miou_total +=video_mIou
+            miou_total += video_mIou
             if (seq + 1) % INFO_INTERVAL == 0:
                 log.logger.info(
                     'epoch:{}, loss_video:{:.3f}({:.3f}), video_mIou:{:.3f}({:.3f}), complete:{:.2f}, lr:{}'.format(
@@ -357,13 +489,29 @@ def _model(model_name):
     elif model_name == 'enhanced':
         from STM.models.model_enhanced import STM
         model = STM()
-        model.Encoder_M.eval()
-        model.Decoder.eval()
-        model.Encoder_Q.eval()
-        model.Memory.eval()
-        model.KV_M_r4.eval()
+        model.eval()
+        model.KV_Q.train()
+    elif model_name == 'standard':
+        from STM.models.model import STM
+        model = STM()
+    elif model_name == 'enhanced_motion':
+        from STM.models.model_enhanced_motion import STM
+        model = STM()
 
     return model
+
+
+def _run(model_name):
+    if model_name == 'motion':
+        return Run_video_motion
+    elif model_name == 'aspp':
+        return Run_video_motion
+    elif model_name == 'enhanced':
+        return Run_video_enhanced
+    elif model_name == 'standard':
+        return Run_video_standard
+    elif model_name == 'enhanced_motion':
+        return Run_video_motion_enhanced()
 
 
 if __name__ == '__main__':
@@ -398,8 +546,6 @@ if __name__ == '__main__':
     DAVIS_ROOT = args.davis
     palette = Image.open(DAVIS_ROOT + '/Annotations/606332/00000.png').getpalette()
 
-    # val_dataset = DAVIS(DAVIS_ROOT, phase='val', imset='tianchi_val_cf.txt', resolution='480p',
-    #                     separate_instance=True, only_single=False, target_size=(864, 480))
     val_dataset = TIANCHI(DAVIS_ROOT, phase='val', imset='tianchi_val.txt', separate_instance=True,
                           target_size=(864, 480), same_frames=False)
     val_loader = data.DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
@@ -418,14 +564,6 @@ if __name__ == '__main__':
         print('resume from:', args.resume_from)
         ckpt = torch.load(args.resume_from)
         model.load_state_dict(ckpt['state_dict'], strict=False)
-        # epoch_start = ckpt['epoch'] + 1
-        # if 'lr' in ckpt.keys():
-        #     lr = ckpt['lr']
-        # if 'optimizer' in ckpt.keys():
-        #     try:
-        #         optimizer.load_state_dict(ckpt['optimizer'])
-        #     except Exception as e:
-        #         print(e)
 
     if args.mode == "val":
         loss_val, miou_val = validate(args, val_loader, model)
