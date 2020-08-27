@@ -56,7 +56,7 @@ def parse_args():
     parser.add_argument("--gpu", type=str, default='0', help="0; 0,1; 0,3; etc")
     # val
     parser.add_argument("--save_masks", type=bool, default=True, help='whether save predicting mask when mode is val')
-    parser.add_argument('--vis_val', type=bool, default=True, help='visualize the result of val')
+    parser.add_argument('--vis_val', type=bool, default=False, help='visualize the result of val')
 
     return parser.parse_args()
 
@@ -259,7 +259,80 @@ def Run_video_enhanced(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mod
         return pred, Es
 
 
-def Run_video_motion_enhanced(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'):
+def Run_video_enhanced_varysize(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'):
+    num_frames = info['num_frames'][0].item()
+    if Mem_every:
+        to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
+    elif Mem_number:
+        to_memorize = [int(round(i)) for i in np.linspace(0, num_frames, num=Mem_number + 2)[:-1]]
+    else:
+        raise NotImplementedError
+
+    b, c, f, h, w = Fs.shape
+    Es = torch.zeros((b, 1, f, h, w)).float().cuda()  # [1,1,50,480,864][b,c,t,h,w]
+    Es[:, :, 0] = Ms[:, :, 0]
+
+    os = []
+    first_frame = Fs[:, :, 0].detach()
+    first_mask = Ms[:, :, 0].detach()
+    first_frame = first_frame * first_mask.repeat(1, 3, 1, 1).type(torch.float)
+    for i in range(b):
+        mask_ = first_mask[i]
+        mask_ = mask_.squeeze(0).cpu().numpy().astype(np.uint8)
+        assert np.any(mask_)
+        x, y, w_, h_ = cv2.boundingRect(mask_)
+        patch = first_frame[i, :, y:(y + h_), x:(x + w_)].cpu().numpy()
+        Os = torch.zeros((1, c, h_, w_))
+        patch = patch.transpose(1, 2, 0)
+        patch = patch.transpose(2, 0, 1)
+        patch = torch.from_numpy(patch)
+        Os[0, :, :, :] = patch
+        os.append(Os)
+
+    loss_video = torch.tensor(0.0).cuda()
+
+    for t in range(1, num_frames):
+        # memorize
+        pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
+        pre_key = pre_key.unsqueeze(2)
+        pre_value = pre_value.unsqueeze(2)
+
+        if t - 1 == 0:  # the first frame
+            this_keys_m, this_values_m = pre_key, pre_value
+        else:  # other frame
+            this_keys_m = torch.cat([keys, pre_key], dim=2)
+            this_values_m = torch.cat([values, pre_value], dim=2)
+
+        # segment
+        logits, p_m2, p_m3 = model([Fs[:, :, t], os, this_keys_m, this_values_m])  # B 2 h w
+        em = F.softmax(logits, dim=1)[:, 1]  # B h w
+        Es[:, 0, t] = em
+
+        # update key and value
+        if t - 1 in to_memorize:
+            keys, values = this_keys_m, this_values_m
+
+        #  calculate loss on cuda
+        if mode == 'train' or mode == 'val':
+            Ms_cuda = Ms[:, 0, t].cuda()
+            loss_video += (_loss(logits, Ms_cuda) + 0.5 * _loss(p_m2, Ms_cuda) + 0.25 * _loss(p_m3, Ms_cuda))
+
+    #  calculate mIOU on cuda
+    pred = torch.round(Es.float().cuda())
+    if mode == 'train' or mode == 'val':
+        video_mIoU = 0
+        for n in range(len(Ms)):  # Nth batch
+            video_mIoU = video_mIoU + get_video_mIoU(pred[n],
+                                                     Ms[n].float().cuda())  # mIOU of video(t frames) for each batch
+        video_mIoU = video_mIoU / len(Ms)  # mean IoU among batch
+
+        return loss_video / num_frames, video_mIoU
+
+    elif mode == 'test':
+        return pred, Es
+
+
+def Run_video_enhanced_motion(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'):
     num_frames = info['num_frames'][0].item()
     intervals = info['intervals']
     if Mem_every:
@@ -377,31 +450,31 @@ def validate(args, val_loader, model):
     loss_all_videos /= len(val_loader)
     miou_all_videos /= len(val_loader)
 
-    if args.vis_val and args.mode == 'val':
-        plt.bar(videos_name, videos_loss)
-        plt.xticks(videos_name, videos_name, rotation=90)
-        plt.axhline(y=loss_all_videos, color="red")
-        plt.savefig(args.work_dir + '/' + str(args.year) + '_loss.png')
-        plt.close()
-
-        plt.bar(videos_name, videos_miou)
-        plt.xticks(videos_name, videos_name, rotation=90)
-        plt.axhline(y=miou_all_videos, color="red")
-        plt.savefig(args.work_dir + '/' + str(args.year) + '_miou.png')
-        plt.close()
-
-        ## writer the result into csv
-        csv_file = args.work_dir + '/' + str(args.year) + '_result.csv'
-        with open(csv_file, 'w') as f:
-            csv_write = csv.writer(f)
-            csv_head = ['video_name', 'miou']
-            csv_write.writerow(csv_head)
-        with open(csv_file, 'a+') as f:
-            csv_write = csv.writer(f)
-            for i in range(len(videos_name)):
-                data_row = [videos_name[i], str(videos_miou[i])]
-                csv_write.writerow(data_row)
-            csv_write.writerow(['all_videos', str(np.mean(videos_miou))])
+    # if args.vis_val and args.mode == 'val':
+    #     plt.bar(videos_name, videos_loss)
+    #     plt.xticks(videos_name, videos_name, rotation=90)
+    #     plt.axhline(y=loss_all_videos, color="red")
+    #     plt.savefig(args.work_dir + '/' + 'loss.png')
+    #     plt.close()
+    #
+    #     plt.bar(videos_name, videos_miou)
+    #     plt.xticks(videos_name, videos_name, rotation=90)
+    #     plt.axhline(y=miou_all_videos, color="red")
+    #     plt.savefig(args.work_dir + '/' + 'miou.png')
+    #     plt.close()
+    #
+    #     ## writer the result into csv
+    #     csv_file = args.work_dir + '/' + 'result.csv'
+    #     with open(csv_file, 'w') as f:
+    #         csv_write = csv.writer(f)
+    #         csv_head = ['video_name', 'miou']
+    #         csv_write.writerow(csv_head)
+    #     with open(csv_file, 'a+') as f:
+    #         csv_write = csv.writer(f)
+    #         for i in range(len(videos_name)):
+    #             data_row = [videos_name[i], str(videos_miou[i])]
+    #             csv_write.writerow(data_row)
+    #         csv_write.writerow(['all_videos', str(np.mean(videos_miou))])
 
     return loss_all_videos, miou_all_videos
 
@@ -497,6 +570,9 @@ def _model(model_name):
     elif model_name == 'enhanced_motion':
         from STM.models.model_enhanced_motion import STM
         model = STM()
+    elif model_name == 'varysize':
+        from STM.models.model_enhanced_varysize import STM
+        model = STM()
 
     return model
 
@@ -511,7 +587,9 @@ def _run(model_name):
     elif model_name == 'standard':
         return Run_video_standard
     elif model_name == 'enhanced_motion':
-        return Run_video_motion_enhanced()
+        return Run_video_enhanced_motion
+    elif model_name == 'varysize':
+        return Run_video_enhanced_varysize
 
 
 if __name__ == '__main__':
@@ -603,7 +681,7 @@ if __name__ == '__main__':
             # prepare training data
             train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train.txt', separate_instance=True,
                                     only_single=False, target_size=(864, 480), clip_size=clip_size, mode='sequence',
-                                    interval=i, train_aug=args.train_aug, keep_one_prev=True)
+                                    interval=i, train_aug=args.train_aug, keep_one_prev=False)
             train_loader = data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0,
                                            pin_memory=True)
 

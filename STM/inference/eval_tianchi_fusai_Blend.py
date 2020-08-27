@@ -45,7 +45,7 @@ def fn_timer(function):
     return function_timer
 
 
-def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='base'):
+def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='standard'):
     seg_result_idx = [i[3] for i in seg_results]
 
     instance_idx = 1
@@ -70,7 +70,7 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='ba
         # start_mask = cv2.resize(start_mask, (w, h))
         start_mask = torch.from_numpy(start_mask).cuda()
 
-        if model_name == 'enhanced':
+        if 'enhanced' in model_name:
             Os = torch.zeros((b, c, int(h / 4), int(w / 4)))
             first_frame = Fs[:, :, start_frame]
             first_mask = start_mask.cpu()
@@ -113,8 +113,10 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='ba
                 logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1]])
             elif model_name == 'aspp':
                 logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, torch.round(Es[:, :, t - 1])])
-            elif model_name == 'base':
+            elif model_name == 'standard':
                 logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m])
+            elif model_name == 'enhanced_motion':
+                logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m, torch.round(Es[:, :, t - 1])])
             else:
                 raise NotImplementedError
             em = F.softmax(logits, dim=1)[:, 1]  # B h w
@@ -175,8 +177,10 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='ba
                 logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1]])
             elif model_name == 'aspp':
                 logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, torch.round(Es[:, :, t + 1])])
-            elif model_name == 'base':
+            elif model_name == 'standard':
                 logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m])
+            elif model_name == 'enhanced_motion':
+                logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m, torch.round(Es[:, :, t - 1])])
             else:
                 raise NotImplementedError
             em = F.softmax(logits, dim=1)[:, 1]  # B h w
@@ -640,17 +644,23 @@ def _model(model_name):
     elif model_name == 'enhanced':
         from STM.models.model_enhanced import STM
         model = STM()
+    elif model_name == 'enhanced_motion':
+        from STM.models.model_enhanced_motion import STM
+        model = STM()
+    elif model_name == 'standard':
+        from STM.models.model import STM
+        model = STM()
 
     return model
 
 
 if __name__ == '__main__':
-    mode = 'online'
+    mode = 'offline'
     if mode == 'online':
         DATA_ROOT = '/workspace/user_data/data'
         IMG_ROOT = '/tcdata'
         # MODEL_PATH = '/workspace/user_data/model_data/dyy_ckpt_124e.pth'
-        MODEL_PATH = '/workspace/user_data/model_data/enhanced_ckpt_79e.pth'
+        MODEL_PATH = '/workspace/user_data/model_data/enhanced_motion_ckpt_1e_0827.pth'
         SAVE_PATH = '/workspace'
         TMP_PATH = '/workspace/user_data/tmp_data'
         MERGE_PATH = '/workspace/user_data/merge_data'
@@ -659,13 +669,14 @@ if __name__ == '__main__':
         CKPT_FILE = r'/workspace/user_data/model_data/solov2_9cls.pth'
         TEMPLATE_MASK = r'/workspace/user_data/template_data/00001.png'
 
-        MODEL_NAME = 'enhanced'
+        MODEL_NAME = 'enhanced_motion'
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
         IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
-        # MODEL_PATH = '/workspace/solo/code/user_data/model_data/dyy_ckpt_124e.pth'
+        # MODEL_PATH = '/workspace/solo/backup_models/dyy_ckpt_124e.pth'
         # MODEL_PATH = '/workspace/solo/backup_models/motion_crop_ckpt_44e.pth' # aspp + motion
-        MODEL_PATH = '/workspace/solo/backup_models/enhanced_ckpt_79e.pth'
+        # MODEL_PATH = '/workspace/solo/backup_models/enhanced2_interval7.pth'
+        MODEL_PATH = r'/workspace/solo/backup_models/enhanced_motion_ckpt_1e_0827.pth'
         SAVE_PATH = '/workspace/solo/code/user_data/'
         TMP_PATH = '/workspace/solo/code/user_data/tmp_data'
         MERGE_PATH = '/workspace/solo/code/user_data/merge_data'
@@ -676,7 +687,7 @@ if __name__ == '__main__':
         VIDEO_PATH = '/workspace/solo/code/user_data/video_data'
         GT_PATH = r'/workspace/dataset/VOS/fusai_train/Annotations/'
 
-        MODEL_NAME = 'enhanced'
+        MODEL_NAME = 'enhanced_motion'
 
         process_tianchi_dir(SAVE_PATH)
 
@@ -703,6 +714,6 @@ if __name__ == '__main__':
     if mode == 'online':
         zip_result(MERGE_PATH, SAVE_PATH)
     else:
-        generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
+        # generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
         miou, num, miou2 = calculate_videos_miou(MERGE_PATH, GT_PATH)
         print('offline evaluation miou: {:.3f}, instances miou: {:.3f}, {} videos counted'.format(miou, miou2, num))

@@ -169,11 +169,8 @@ class KeyValue(nn.Module):
 class Memory(nn.Module):
     def __init__(self):
         super(Memory, self).__init__()
-        self.conv_w = nn.Conv2d(129, 1, kernel_size=(3, 3), padding=(1, 1), stride=1)
-        self.conv_b = nn.Conv2d(129, 1, kernel_size=(3, 3), padding=(1, 1), stride=1)
-        self.sigmoid = nn.Sigmoid()
 
-    def forward(self, keys_m, values_m, key_q, value_q, mask):
+    def forward(self, keys_m, values_m, key_q, value_q):
         '''
         :param keys_m: [B,C,T,H,W], c = 128
         :param values_m: [B,C,T,H,W], c = 512
@@ -182,17 +179,8 @@ class Memory(nn.Module):
         :return: final_value [B, C, H, W]
         '''
         B, C_key, T, H, W = keys_m.size()
+        # print('#####', B, C_key, T, H, W)
         _, C_value, _, _, _ = values_m.size()
-
-        p_mask = self.process_mask(mask, (H, W))  # B, 1, H, W
-        key_q_c = torch.cat([key_q, p_mask], dim=1)  # B, Ck+1, H, W
-        w = self.conv_w(key_q_c)
-        w = self.sigmoid(w)
-        b = self.conv_b(key_q_c)
-        b = self.sigmoid(b)
-        p_mask = w * p_mask + b  # B, 1, H, W
-        p_mask = p_mask.view(B, 1, H * W)  # b, 1, h*w
-        p_mask = p_mask.expand(-1, T * H * W, -1)
 
         keys_m_temp = keys_m.view(B, C_key, T * H * W)
         keys_m_temp = torch.transpose(keys_m_temp, 1, 2)  # [b,thw,c]
@@ -203,34 +191,13 @@ class Memory(nn.Module):
         p = p / math.sqrt(C_key)
         p = F.softmax(p, dim=1)  # b, thw, hw
 
-        km = p * p_mask  # b, thw, hw
-
         mo = values_m.view(B, C_value, T * H * W)  # [b,c,thw]
-        mem = torch.bmm(mo, km)  # Weighted-sum B, c, hw
+        mem = torch.bmm(mo, p)  # Weighted-sum B, c, hw
         mem = mem.view(B, C_value, H, W)
 
         final_value = torch.cat([mem, value_q], dim=1)
 
         return final_value
-
-    @staticmethod
-    def process_mask(mask, shape):
-        pool = nn.AdaptiveAvgPool2d(shape)
-        mask = pool(mask)
-        b, c, h, w = mask.shape
-        p_mask = torch.zeros_like(mask)
-        for i in range(b):
-            m_ = mask[i].squeeze(0)
-            m_ = m_.cpu().numpy()
-            if not np.any(m_):
-                m_ = np.ones_like(m_)
-            m_ *= 255
-            m_ = cv2.GaussianBlur(m_, (11, 11), 0, 0)
-            m_ = torch.from_numpy(m_).unsqueeze(0)
-            m_ /= 255
-            p_mask[i] = m_
-
-        return p_mask
 
 
 class ASPP(nn.Module):
@@ -273,7 +240,7 @@ class STM(nn.Module):
         self.Memory = Memory()
         self.Decoder = Decoder(256)
 
-    def segment(self, frame, template, key, value, prev_mask):
+    def segment(self, frame, template_list, key, value):
         '''
         :param frame: 当前需要分割的image；[B,C,H,W]
         :param key: 当前memory的key；[B,C,T,H,W]
@@ -282,20 +249,24 @@ class STM(nn.Module):
         '''
         # encode
         r4, r3, r2, _, _, x = self.Encoder_Q(frame)
-        t4, t3, t2, _, _, tx = self.Encoder_Q(template)
+        template_feature_list = []
+        for t_ in template_list:
+            t4, _, _, _, _, _ = self.Encoder_Q(t_)
+            template_feature_list.append(t4)
         b, c, h, w = r4.shape
-        _, _, kh, kw = t4.shape
-        Conv2d = Conv2dDynamicSamePadding(in_channels=c, out_channels=1, kernel_size=(kh, kw))
+
         f = torch.zeros(b, 1, h, w).cuda()
         for i in range(b):
-            # y = F.conv2d(r4[i].unsqueeze(0), t4[i].unsqueeze(0), padding=(3, 3))
-            y = Conv2d(r4[i].unsqueeze(0), t4[i].unsqueeze(0))
+            tf = template_feature_list[i]
+            _, _, th, tw = tf.shape
+            Conv2d = Conv2dDynamicSamePadding(in_channels=c, out_channels=1, kernel_size=(th, tw))
+            y = Conv2d(r4[i].unsqueeze(0), tf)
             f[i] = y
         r4 = torch.cat([r4, f], dim=1)
         curKey, curValue = self.KV_Q(r4)  # 1, dim, H/16, W/16
 
         # memory select
-        final_value = self.Memory(key, value, curKey, curValue, prev_mask)
+        final_value = self.Memory(key, value, curKey, curValue)
         logits, p_m2, p_m3 = self.Decoder(final_value, r3, r2)  # [b,2,h,w]
         logits = self.get_logit(logits)
         p_m2 = self.get_logit(p_m2)

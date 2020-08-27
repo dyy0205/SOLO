@@ -160,6 +160,8 @@ class Decoder(nn.Module):
         p4 = self.pred2(F.relu(m4))
 
         p = F.interpolate(p2, scale_factor=4, mode='bilinear', align_corners=False)
+        p3 = F.interpolate(p3, scale_factor=8, mode='bilinear', align_corners=False)
+        p4 = F.interpolate(p4, scale_factor=16, mode='bilinear', align_corners=False)
         return p, p3, p4  # , p2, p3, p4
 
 
