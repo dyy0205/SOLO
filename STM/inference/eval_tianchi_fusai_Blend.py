@@ -70,7 +70,7 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
         # start_mask = cv2.resize(start_mask, (w, h))
         start_mask = torch.from_numpy(start_mask).cuda()
 
-        if 'enhanced' in model_name:
+        if model_name in ('enhanced', 'enhanced_motion'):
             Os = torch.zeros((b, c, int(h / 4), int(w / 4)))
             first_frame = Fs[:, :, start_frame]
             first_mask = start_mask.cpu()
@@ -91,9 +91,32 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                 patch = torch.from_numpy(patch)
                 Os[i, :, :, :] = patch
 
+        if model_name == 'varysize':
+            os = []
+            first_frame = Fs[:, :, start_frame]
+            first_mask = start_mask.cpu()
+            if len(first_mask.shape) == 2:
+                first_mask = first_mask.unsqueeze(0).unsqueeze(0)
+            elif len(first_mask.shape) == 3:
+                first_mask = first_mask.unsqueeze(0)
+            first_frame = first_frame * first_mask.repeat(1, 3, 1, 1).type(torch.float)
+            for i in range(b):
+                mask_ = first_mask[i]
+                mask_ = mask_.squeeze(0).cpu().numpy().astype(np.uint8)
+                assert np.any(mask_)
+                x, y, w_, h_ = cv2.boundingRect(mask_)
+                patch = first_frame[i, :, y:(y + h_), x:(x + w_)].cpu().numpy()
+                Os = torch.zeros((1, c, h_, w_))
+                patch = patch.transpose(1, 2, 0)
+                patch = patch.transpose(2, 0, 1)
+                patch = torch.from_numpy(patch)
+                Os[0, :, :, :] = patch
+                os.append(Os)
+
         Es = torch.zeros((b, 1, T, h, w)).float().cuda()
         Es[:, :, start_frame] = start_mask
-        to_memorize = [int(i) for i in np.arange(start_frame, num_frames, step=Mem_every)]
+        # to_memorize = [int(i) for i in np.arange(start_frame, num_frames, step=Mem_every)]
+        to_memorize = [start_frame]
         for t in range(start_frame + 1, num_frames):  # frames after
             # memorize
             pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
@@ -117,6 +140,8 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                 logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m])
             elif model_name == 'enhanced_motion':
                 logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m, torch.round(Es[:, :, t - 1])])
+            elif model_name == 'varysize':
+                logits, _, _ = model([Fs[:, :, t], os, this_keys_m, this_values_m])
             else:
                 raise NotImplementedError
             em = F.softmax(logits, dim=1)[:, 1]  # B h w
@@ -141,6 +166,7 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                         same_idx = np.argmax(ious)
                         Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
                         reserve.remove(same_idx)
+                        to_memorize.append(t)
 
                     for i, iou in enumerate(ious):
                         if iou >= IOU2 and iou < IOU1:
@@ -157,7 +183,8 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                 keys, values = this_keys_m, this_values_m
 
 
-        to_memorize = [start_frame - int(i) for i in np.arange(0, start_frame + 1, step=Mem_every)]
+        # to_memorize = [start_frame - int(i) for i in np.arange(0, start_frame + 1, step=Mem_every)]
+        to_memorize = [start_frame]
         for t in list(range(0, start_frame))[::-1]:  # frames before
             # memorize
             pre_key, pre_value = model([Fs[:, :, t + 1], Es[:, :, t + 1]])
@@ -181,6 +208,8 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                 logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m])
             elif model_name == 'enhanced_motion':
                 logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m, torch.round(Es[:, :, t - 1])])
+            elif model_name == 'varysize':
+                logits, _, _ = model([Fs[:, :, t], os, this_keys_m, this_values_m])
             else:
                 raise NotImplementedError
             em = F.softmax(logits, dim=1)[:, 1]  # B h w
@@ -205,6 +234,7 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                         same_idx = np.argmax(ious)
                         Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
                         reserve.remove(same_idx)
+                        to_memorize.append(t)
 
                     for i, iou in enumerate(ious):
                         if iou >= IOU2 and iou < IOU1:
@@ -339,12 +369,13 @@ def mask_inference(video_name, mask_shape):
 
     results = filter_score(results)
 
-    # visualize solo mask
-    for result in results:
-        mask_result = result[:3]
-        frame = result[3]
-        img = os.path.join(DATA_ROOT, 'JPEGImages/{}/{}.jpg'.format(video_name, frames[frame]))
-        save_mask(img, mask_result, 0, MASK_PATH)
+    if MODE == 'offline':
+        # visualize solo mask
+        for result in results:
+            mask_result = result[:3]
+            frame = result[3]
+            img = os.path.join(DATA_ROOT, 'JPEGImages/{}/{}.jpg'.format(video_name, frames[frame]))
+            save_mask(img, mask_result, 0, MASK_PATH)
     return results
 
 
@@ -650,17 +681,22 @@ def _model(model_name):
     elif model_name == 'standard':
         from STM.models.model import STM
         model = STM()
+    elif model_name == 'varysize':
+        from STM.models.model_enhanced_varysize import STM
+        model = STM()
+    else:
+        raise ValueError
 
     return model
 
 
 if __name__ == '__main__':
-    mode = 'offline'
-    if mode == 'online':
+    MODE = 'offline'
+    if MODE == 'online':
         DATA_ROOT = '/workspace/user_data/data'
         IMG_ROOT = '/tcdata'
-        # MODEL_PATH = '/workspace/user_data/model_data/dyy_ckpt_124e.pth'
-        MODEL_PATH = '/workspace/user_data/model_data/enhanced_motion_ckpt_1e_0827.pth'
+        MODEL_PATH = '/workspace/user_data/model_data/dyy_ckpt_124e.pth'
+        # MODEL_PATH = '/workspace/user_data/model_data/enhanced_motion_ckpt_1e_0827.pth'
         SAVE_PATH = '/workspace'
         TMP_PATH = '/workspace/user_data/tmp_data'
         MERGE_PATH = '/workspace/user_data/merge_data'
@@ -669,14 +705,14 @@ if __name__ == '__main__':
         CKPT_FILE = r'/workspace/user_data/model_data/solov2_9cls.pth'
         TEMPLATE_MASK = r'/workspace/user_data/template_data/00001.png'
 
-        MODEL_NAME = 'enhanced_motion'
+        MODEL_NAME = 'motion'
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
         IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
-        # MODEL_PATH = '/workspace/solo/backup_models/dyy_ckpt_124e.pth'
+        MODEL_PATH = '/workspace/solo/backup_models/dyy_ckpt_124e.pth'
         # MODEL_PATH = '/workspace/solo/backup_models/motion_crop_ckpt_44e.pth' # aspp + motion
         # MODEL_PATH = '/workspace/solo/backup_models/enhanced2_interval7.pth'
-        MODEL_PATH = r'/workspace/solo/backup_models/enhanced_motion_ckpt_1e_0827.pth'
+        # MODEL_PATH = r'/workspace/solo/backup_models/enhanced2_interval22.pth'
         SAVE_PATH = '/workspace/solo/code/user_data/'
         TMP_PATH = '/workspace/solo/code/user_data/tmp_data'
         MERGE_PATH = '/workspace/solo/code/user_data/merge_data'
@@ -687,7 +723,7 @@ if __name__ == '__main__':
         VIDEO_PATH = '/workspace/solo/code/user_data/video_data'
         GT_PATH = r'/workspace/dataset/VOS/fusai_train/Annotations/'
 
-        MODEL_NAME = 'enhanced_motion'
+        MODEL_NAME = 'motion'
 
         process_tianchi_dir(SAVE_PATH)
 
@@ -699,10 +735,10 @@ if __name__ == '__main__':
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
-    # TARGET_SHAPE = (1008, 560)
-    TARGET_SHAPE = (864, 480)
+    TARGET_SHAPE = (1008, 560)
+    # TARGET_SHAPE = (864, 480)
     SCORE_THR = 0.3
-    SOLO_INTERVAL = 2
+    SOLO_INTERVAL = 1
     MAX_NUM = 8
     IOU1 = 0.5
     IOU2 = 0.1
@@ -711,9 +747,9 @@ if __name__ == '__main__':
     generate_imagesets()
     vos_inference()
     blend_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
-    if mode == 'online':
+    if MODE == 'online':
         zip_result(MERGE_PATH, SAVE_PATH)
     else:
-        # generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
+        generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
         miou, num, miou2 = calculate_videos_miou(MERGE_PATH, GT_PATH)
         print('offline evaluation miou: {:.3f}, instances miou: {:.3f}, {} videos counted'.format(miou, miou2, num))
