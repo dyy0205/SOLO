@@ -681,7 +681,7 @@ if __name__ == '__main__':
             # prepare training data
             train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train.txt', separate_instance=True,
                                     only_single=False, target_size=(864, 480), clip_size=clip_size, mode='sequence',
-                                    interval=i, train_aug=args.train_aug, keep_one_prev=False)
+                                    interval=i, train_aug=args.train_aug, keep_one_prev=True)
             train_loader = data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0,
                                            pin_memory=True)
 

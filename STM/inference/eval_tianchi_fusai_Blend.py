@@ -738,7 +738,7 @@ if __name__ == '__main__':
     TARGET_SHAPE = (1008, 560)
     # TARGET_SHAPE = (864, 480)
     SCORE_THR = 0.3
-    SOLO_INTERVAL = 1
+    SOLO_INTERVAL = 2
     MAX_NUM = 8
     IOU1 = 0.5
     IOU2 = 0.1
