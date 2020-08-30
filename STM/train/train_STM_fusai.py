@@ -358,7 +358,11 @@ def Run_video_enhanced_motion(model, Fs, Ms, info, Mem_every=None, Mem_number=No
         mask_ = mask_.squeeze(0).cpu().numpy().astype(np.uint8)
         assert np.any(mask_)
         x, y, w_, h_ = cv2.boundingRect(mask_)
-        patch = first_frame[i, :, y:(y + h_), x:(x + w_)].cpu().numpy()
+        # c_x = x + w_ / 2
+        # c_y = y + h_ / 2
+        # c_x = np.clip(c_x, h / 8, 7 * h / 8)
+        # c_y = np.clip(c_y, w / 8, 7 * w / 8)
+        patch = first_frame[i, :, y: (y + h_), x: (x + w_)].cpu().numpy()
         patch = patch.transpose(1, 2, 0)
         # patch = cv2.resize(patch, (template_size, template_size))
         # patch = patch.transpose(2, 1, 0)

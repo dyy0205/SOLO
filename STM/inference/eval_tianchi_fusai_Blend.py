@@ -201,13 +201,13 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
             if model_name == 'enhanced':
                 logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m])
             elif model_name == 'motion':
-                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1]])
+                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t + 1]])
             elif model_name == 'aspp':
                 logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, torch.round(Es[:, :, t + 1])])
             elif model_name == 'standard':
                 logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m])
             elif model_name == 'enhanced_motion':
-                logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m, torch.round(Es[:, :, t - 1])])
+                logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m, torch.round(Es[:, :, t + 1])])
             elif model_name == 'varysize':
                 logits, _, _ = model([Fs[:, :, t], os, this_keys_m, this_values_m])
             else:
@@ -709,7 +709,7 @@ if __name__ == '__main__':
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
         IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
-        MODEL_PATH = '/workspace/solo/backup_models/dyy_ckpt_124e.pth'
+        MODEL_PATH = '/workspace/solo/backup_models/STM/dyy_ckpt_124e.pth'
         # MODEL_PATH = '/workspace/solo/backup_models/motion_crop_ckpt_44e.pth' # aspp + motion
         # MODEL_PATH = '/workspace/solo/backup_models/enhanced2_interval7.pth'
         # MODEL_PATH = r'/workspace/solo/backup_models/enhanced2_interval22.pth'
@@ -717,8 +717,8 @@ if __name__ == '__main__':
         TMP_PATH = '/workspace/solo/code/user_data/tmp_data'
         MERGE_PATH = '/workspace/solo/code/user_data/merge_data'
         MASK_PATH = os.path.join(DATA_ROOT, 'Annotations')
-        CONFIG_FILE = r'/workspace/solo/code/cfg/aug_solov2_r101.py'
-        CKPT_FILE = r'/workspace/solo/code/user_data/model_data/solov2_9cls.pth'
+        CONFIG_FILE = r'/workspace/solo/code/cfg/aug_solov2_r101_1cls.py'
+        CKPT_FILE = r'/workspace/solo/code/user_data/model_data/solov2_1cls.pth'
         TEMPLATE_MASK = r'/workspace/solo/code/user_data/template_data/00001.png'
         VIDEO_PATH = '/workspace/solo/code/user_data/video_data'
         GT_PATH = r'/workspace/dataset/VOS/fusai_train/Annotations/'
