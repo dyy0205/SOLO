@@ -598,6 +598,7 @@ def _run(model_name):
 
 if __name__ == '__main__':
     args = parse_args()
+    TARGET_SHAPE = (992, 544)
 
     if not os.path.exists(args.work_dir):
         os.makedirs(args.work_dir)
@@ -629,7 +630,7 @@ if __name__ == '__main__':
     palette = Image.open(DAVIS_ROOT + '/Annotations/606332/00000.png').getpalette()
 
     val_dataset = TIANCHI(DAVIS_ROOT, phase='val', imset='tianchi_val.txt', separate_instance=True,
-                          target_size=(864, 480), same_frames=False)
+                          target_size=TARGET_SHAPE, same_frames=False)
     val_loader = data.DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 
     model = nn.DataParallel(model)
@@ -684,7 +685,7 @@ if __name__ == '__main__':
             log.logger.info('Training interval:{}'.format(i))
             # prepare training data
             train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train.txt', separate_instance=True,
-                                    only_single=False, target_size=(864, 480), clip_size=clip_size, mode='sequence',
+                                    only_single=False, target_size=TARGET_SHAPE, clip_size=clip_size, mode='sequence',
                                     interval=i, train_aug=args.train_aug, keep_one_prev=True)
             train_loader = data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0,
                                            pin_memory=True)

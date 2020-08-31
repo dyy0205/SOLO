@@ -184,18 +184,24 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
 
 
         # to_memorize = [start_frame - int(i) for i in np.arange(0, start_frame + 1, step=Mem_every)]
-        to_memorize = [start_frame]
+        # to_memorize = [start_frame]
+        to_memorize = []
         for t in list(range(0, start_frame))[::-1]:  # frames before
             # memorize
             pre_key, pre_value = model([Fs[:, :, t + 1], Es[:, :, t + 1]])
             pre_key = pre_key.unsqueeze(2)
             pre_value = pre_value.unsqueeze(2)
 
-            if t + 1 == start_frame:  # the first frame
-                this_keys_m, this_values_m = pre_key, pre_value
-            else:  # other frame
+            # if t + 1 == start_frame:  # the first frame
+            #     this_keys_m, this_values_m = pre_key, pre_value
+            # else:  # other frame
+            #     this_keys_m = torch.cat([keys, pre_key], dim=2)
+            #     this_values_m = torch.cat([values, pre_value], dim=2)
+            if 'keys' in vars() and 'values' in vars():
                 this_keys_m = torch.cat([keys, pre_key], dim=2)
                 this_values_m = torch.cat([values, pre_value], dim=2)
+            else:
+                this_keys_m, this_values_m = pre_key, pre_value
 
             # segment
             if model_name == 'enhanced':
@@ -709,16 +715,17 @@ if __name__ == '__main__':
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
         IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
-        MODEL_PATH = '/workspace/solo/backup_models/STM/dyy_ckpt_124e.pth'
-        # MODEL_PATH = '/workspace/solo/backup_models/motion_crop_ckpt_44e.pth' # aspp + motion
-        # MODEL_PATH = '/workspace/solo/backup_models/enhanced2_interval7.pth'
-        # MODEL_PATH = r'/workspace/solo/backup_models/enhanced2_interval22.pth'
+        # MODEL_PATH = '/workspace/solo/backup_models/STM/hkf_motion_21e_0831.pth'
+        # MODEL_PATH = '/workspace/solo/backup_models/STM/motion_crop_ckpt_44e.pth' # aspp + motion
+        # MODEL_PATH = '/workspace/solo/backup_models/STM/enhanced_motion_ckpt_1e_0827.pth'
+        # MODEL_PATH = r'/workspace/solo/backup_models/STM/enhanced2_interval22.pth'
+        MODEL_PATH = r'/workspace/solo/backup_models/STM/dyy_ckpt_124e.pth'
         SAVE_PATH = '/workspace/solo/code/user_data/'
         TMP_PATH = '/workspace/solo/code/user_data/tmp_data'
         MERGE_PATH = '/workspace/solo/code/user_data/merge_data'
         MASK_PATH = os.path.join(DATA_ROOT, 'Annotations')
-        CONFIG_FILE = r'/workspace/solo/code/cfg/aug_solov2_r101_1cls.py'
-        CKPT_FILE = r'/workspace/solo/code/user_data/model_data/solov2_1cls.pth'
+        CONFIG_FILE = r'/workspace/solo/code/cfg/aug_solov2_r101.py'
+        CKPT_FILE = r'/workspace/solo/backup_models/solo/solov2_9cls.pth'
         TEMPLATE_MASK = r'/workspace/solo/code/user_data/template_data/00001.png'
         VIDEO_PATH = '/workspace/solo/code/user_data/video_data'
         GT_PATH = r'/workspace/dataset/VOS/fusai_train/Annotations/'
@@ -735,8 +742,9 @@ if __name__ == '__main__':
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
-    TARGET_SHAPE = (1008, 560)
+    # TARGET_SHAPE = (992, 544)
     # TARGET_SHAPE = (864, 480)
+    TARGET_SHAPE = (1008, 560)
     SCORE_THR = 0.3
     SOLO_INTERVAL = 2
     MAX_NUM = 8
@@ -750,6 +758,6 @@ if __name__ == '__main__':
     if MODE == 'online':
         zip_result(MERGE_PATH, SAVE_PATH)
     else:
-        generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
+        # generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
         miou, num, miou2 = calculate_videos_miou(MERGE_PATH, GT_PATH)
         print('offline evaluation miou: {:.3f}, instances miou: {:.3f}, {} videos counted'.format(miou, miou2, num))
