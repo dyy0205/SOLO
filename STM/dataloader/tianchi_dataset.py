@@ -71,7 +71,7 @@ class TIANCHI(data.Dataset):
 
     def __init__(self, root, phase='train', imset='2016/val.txt', separate_instance=False, only_single=False,
                  target_size=(864, 480), crop_size=(512, 512), clip_size=3, only_multiple=False, mode='sample',
-                 interval=1, same_frames=False, train_aug=False, keep_one_prev=False):
+                 interval=1, same_frames=False, train_aug=False, keep_one_prev=False, add_prev_mask=False):
         assert phase in ['train', 'test', 'val']
         self.phase = phase
         self.root = root
@@ -90,6 +90,7 @@ class TIANCHI(data.Dataset):
         assert mode in ('sample', 'sequence')
         self.same_frames = same_frames
         self.keep_one_prev = keep_one_prev
+        self.add_prev_mask = add_prev_mask
 
         self.mask_dir = os.path.join(root, 'Annotations')
         self.image_dir = os.path.join(root, 'JPEGImages')
@@ -113,7 +114,6 @@ class TIANCHI(data.Dataset):
                 _mask = np.array(
                     Image.open(os.path.join(self.mask_dir, _video, temp_mask[0])).convert("P").resize(self.target_size,
                                                                                                       Image.BILINEAR))
-                # _mask = np.array(Image.open(os.path.join(self.mask_dir, _video, temp_mask[0])).convert("P"))
 
                 num_objects = _mask.max()
                 if self.OM and num_objects == 1:
@@ -195,6 +195,8 @@ class TIANCHI(data.Dataset):
 
         N_frames = np.empty((final_clip_size,) + self.shape[video] + (3,), dtype=np.float32)
         N_masks = np.empty((final_clip_size,) + self.shape[video], dtype=np.uint8)
+        if self.add_prev_mask:
+            N_prevs = np.empty((final_clip_size-1,) + self.shape[video], dtype=np.uint8)
 
         # generate frame numbers
         if self.phase == 'train' and final_clip_size < self.num_frames[video] and self.mode == 'sample':
@@ -234,11 +236,9 @@ class TIANCHI(data.Dataset):
             img_file = os.path.join(self.image_dir, video_true_name, self.frame_list[video][frames_num[f]])
             N_frames[f] = np.array(
                 Image.open(img_file).convert('RGB').resize(self.target_size, Image.BILINEAR)) / 255.
-            # N_frames[f] = np.array(Image.open(img_file).convert('RGB')) / 255.
 
             mask_file = os.path.join(self.mask_dir, video_true_name, self.mask_list[video][frames_num[f]])
             temp = np.array(Image.open(mask_file).convert('P').resize(self.target_size, Image.BILINEAR), dtype=np.uint8)
-            # temp = np.array(Image.open(mask_file).convert('P'), dtype=np.uint8)
 
             temp_mask = np.zeros(temp.shape)
             if self.SI:
@@ -246,6 +246,20 @@ class TIANCHI(data.Dataset):
             else:
                 temp_mask[temp > 0] = 1
             N_masks[f] = (temp_mask != 0).astype(np.uint8)
+
+        if self.add_prev_mask:
+            prevs_num = [frames_num[i] - 1 for i in range(1, len(frames_num))]
+            for f in range(len(prevs_num)):
+                mask_file = os.path.join(self.mask_dir, video_true_name, self.mask_list[video][prevs_num[f]])
+                temp = np.array(Image.open(mask_file).convert('P').resize(self.target_size, Image.BILINEAR),
+                                dtype=np.uint8)
+
+                temp_mask = np.zeros(temp.shape)
+                if self.SI:
+                    temp_mask[temp == object_label] = 1
+                else:
+                    temp_mask[temp > 0] = 1
+                N_prevs[f] = (temp_mask != 0).astype(np.uint8)
 
         # first frame should not be empty
         assert np.any(N_masks[0])
@@ -288,9 +302,15 @@ class TIANCHI(data.Dataset):
             Fs = torch.from_numpy(N_frames).permute(3, 0, 1, 2).float()
             Ms = torch.from_numpy(N_masks[np.newaxis, :, :, :]).long()
 
-        sample = {
-            'Fs': Fs, 'Ms': Ms, 'info': info
-        }
+        if self.add_prev_mask:
+            Ps = torch.from_numpy(N_prevs[np.newaxis, :, :, :]).long()
+            sample = {
+                'Fs': Fs, 'Ms': Ms, 'Ps': Ps, 'info': info
+            }
+        else:
+            sample = {
+                'Fs': Fs, 'Ms': Ms, 'info': info
+            }
         return sample
 
     def aug(self, image, mask, crop_size, seed=None):
