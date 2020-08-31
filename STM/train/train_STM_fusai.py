@@ -577,6 +577,9 @@ def _model(model_name):
     elif model_name == 'varysize':
         from STM.models.model_enhanced_varysize import STM
         model = STM()
+    elif model_name == 'sp':
+        from STM.models.model_fusai_spatial_prior import STM
+        model = STM()
 
     return model
 
@@ -594,6 +597,8 @@ def _run(model_name):
         return Run_video_enhanced_motion
     elif model_name == 'varysize':
         return Run_video_enhanced_varysize
+    elif model_name == 'sp':
+        return Run_video_motion
 
 
 if __name__ == '__main__':
