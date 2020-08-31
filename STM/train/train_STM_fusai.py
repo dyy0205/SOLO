@@ -61,7 +61,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def Run_video_motion(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'):
+def Run_video_motion(model, batch, Mem_every=None, Mem_number=None, mode='train'):
+    Fs, Ms, info = batch['Fs'], batch['Ms'], batch['info']
     num_frames = info['num_frames'][0].item()
     intervals = info['intervals']
     if Mem_every:
@@ -126,7 +127,69 @@ def Run_video_motion(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode=
         return pred, Es
 
 
-def Run_video_standard(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'):
+def Run_video_sp(model, batch, Mem_every=None, Mem_number=None, mode='train'):
+    Fs, Ms, Ps, info = batch['Fs'], batch['Ms'], batch['Ps'], batch['info']
+    num_frames = info['num_frames'][0].item()
+    intervals = info['intervals']
+    if Mem_every:
+        to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
+    elif Mem_number:
+        to_memorize = [int(round(i)) for i in np.linspace(0, num_frames, num=Mem_number + 2)[:-1]]
+    else:
+        raise NotImplementedError
+
+    B, _, f, H, W = Fs.shape
+    Es = torch.zeros((B, 1, f, H, W)).float().cuda()  # [1,1,50,480,864][b,c,t,h,w]
+    Es[:, :, 0] = Ms[:, :, 0]
+
+    loss_video = torch.tensor(0.0).cuda()
+    loss_total = torch.tensor(0.0).cuda()
+
+    for t in range(1, num_frames):
+        interval = intervals[t][0].item()
+        # memorize
+        pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
+        pre_key = pre_key.unsqueeze(2)
+        pre_value = pre_value.unsqueeze(2)
+
+        if t - 1 == 0:  # the first frame
+            this_keys_m, this_values_m = pre_key, pre_value
+        else:  # other frame
+            this_keys_m = torch.cat([keys, pre_key], dim=2)
+            this_values_m = torch.cat([values, pre_value], dim=2)
+
+        # segment
+        prev_mask = Ps[:, :, t - 1].float()
+        logits, p_m2, p_m3 = model([Fs[:, :, t], this_keys_m, this_values_m, prev_mask])
+        em = F.softmax(logits, dim=1)[:, 1]  # B h w
+        Es[:, 0, t] = em
+
+        #  calculate loss on cuda
+        if mode == 'train' or mode == 'val':
+            Ms_cuda = Ms[:, 0, t].cuda()
+            loss_video += _loss(logits, Ms_cuda) + 0.5 * _loss(p_m2, Ms_cuda) + 0.25 * _loss(p_m3, Ms_cuda)
+            loss_total = loss_video
+
+        # update key and value
+        if t - 1 in to_memorize:
+            keys, values = this_keys_m, this_values_m
+
+    #  calculate mIOU on cuda
+    pred = torch.round(Es.float().cuda())
+    if mode == 'train' or mode == 'val':
+        video_mIoU = 0
+        for n in range(len(Ms)):  # Nth batch
+            video_mIoU = video_mIoU + get_video_mIoU(pred[n], Ms[n].cuda())  # mIOU of video(t frames) for each batch
+        video_mIoU = video_mIoU / len(Ms)  # mean IoU among batch
+
+        return loss_total / num_frames, video_mIoU
+
+    elif mode == 'test':
+        return pred, Es
+
+
+def Run_video_standard(model, batch, Mem_every=None, Mem_number=None, mode='train'):
+    Fs, Ms, info = batch['Fs'], batch['Ms'], batch['info']
     num_frames = info['num_frames'][0].item()
     if Mem_every:
         to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
@@ -183,7 +246,8 @@ def Run_video_standard(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mod
         return pred, Es
 
 
-def Run_video_enhanced(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'):
+def Run_video_enhanced(model, batch, Mem_every=None, Mem_number=None, mode='train'):
+    Fs, Ms, info = batch['Fs'], batch['Ms'], batch['info']
     num_frames = info['num_frames'][0].item()
     if Mem_every:
         to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
@@ -259,7 +323,8 @@ def Run_video_enhanced(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mod
         return pred, Es
 
 
-def Run_video_enhanced_varysize(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'):
+def Run_video_enhanced_varysize(model, batch, Mem_every=None, Mem_number=None, mode='train'):
+    Fs, Ms, info = batch['Fs'], batch['Ms'], batch['info']
     num_frames = info['num_frames'][0].item()
     if Mem_every:
         to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
@@ -332,7 +397,8 @@ def Run_video_enhanced_varysize(model, Fs, Ms, info, Mem_every=None, Mem_number=
         return pred, Es
 
 
-def Run_video_enhanced_motion(model, Fs, Ms, info, Mem_every=None, Mem_number=None, mode='train'):
+def Run_video_enhanced_motion(model, batch, Mem_every=None, Mem_number=None, mode='train'):
+    Fs, Ms, info = batch['Fs'], batch['Ms'], batch['info']
     num_frames = info['num_frames'][0].item()
     intervals = info['intervals']
     if Mem_every:
@@ -510,7 +576,7 @@ def train(args, optimizer, train_loader, model, epochs, epoch_start=0, lr=1e-5):
             num_frames = info['num_frames'][0].item()
             optimizer.zero_grad()
 
-            loss_video, video_mIou = run_fun(model, Fs, Ms, info, Mem_every=1, Mem_number=None,
+            loss_video, video_mIou = run_fun(model, batch, Mem_every=1, Mem_number=None,
                                              mode='train')
 
             # backward
@@ -598,12 +664,12 @@ def _run(model_name):
     elif model_name == 'varysize':
         return Run_video_enhanced_varysize
     elif model_name == 'sp':
-        return Run_video_motion
+        return Run_video_sp
 
 
 if __name__ == '__main__':
     args = parse_args()
-    TARGET_SHAPE = (992, 544)
+    TARGET_SHAPE = (1088, 384)
 
     if not os.path.exists(args.work_dir):
         os.makedirs(args.work_dir)
@@ -689,9 +755,18 @@ if __name__ == '__main__':
         for i in intervals:
             log.logger.info('Training interval:{}'.format(i))
             # prepare training data
-            train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train.txt', separate_instance=True,
-                                    only_single=False, target_size=TARGET_SHAPE, clip_size=clip_size, mode='sequence',
-                                    interval=i, train_aug=args.train_aug, keep_one_prev=True)
+            if model_name == 'sp':
+                train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train.txt', separate_instance=True,
+                                        only_single=False, target_size=TARGET_SHAPE, clip_size=clip_size,
+                                        mode='sequence', interval=i, train_aug=args.train_aug, add_prev_mask=True)
+            elif model_name == 'motion':
+                train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train.txt', separate_instance=True,
+                                        only_single=False, target_size=TARGET_SHAPE, clip_size=clip_size,
+                                        mode='sequence', interval=i, train_aug=args.train_aug, keep_one_prev=True)
+            else:
+                train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train.txt', separate_instance=True,
+                                        only_single=False, target_size=TARGET_SHAPE, clip_size=clip_size,
+                                        mode='sequence', interval=i, train_aug=args.train_aug)
             train_loader = data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0,
                                            pin_memory=True)
 
