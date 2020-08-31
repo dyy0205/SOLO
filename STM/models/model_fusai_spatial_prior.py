@@ -28,8 +28,8 @@ print('Space-time Memory Networks: initialized.')
 class ASPP(nn.Module):
     def __init__(self, in_channel=1024, depth=256):
         super(ASPP, self).__init__()
-        self.mean = nn.AdaptiveAvgPool2d((1, 1))  # (1,1)means ouput_dim
-        self.conv = nn.Conv2d(in_channel, depth, 1, 1)
+        # self.mean = nn.AdaptiveAvgPool2d((1, 1))  # (1,1)means ouput_dim
+        # self.conv = nn.Conv2d(in_channel, depth, 1, 1)
         # self.atrous_block1 = nn.Conv2d(in_channel, depth, 1, 1)
         # self.atrous_block6 = nn.Conv2d(in_channel, depth, 3, 1, padding=6, dilation=6)
         # self.atrous_block12 = nn.Conv2d(in_channel, depth, 3, 1, padding=12, dilation=12)
@@ -38,14 +38,14 @@ class ASPP(nn.Module):
         self.atrous_block4 = nn.Conv2d(in_channel, depth, 3, 1, padding=4, dilation=4)
         self.atrous_block8 = nn.Conv2d(in_channel, depth, 3, 1, padding=8, dilation=8)
         # self.conv_1x1_output = nn.Conv2d(depth * 5, depth, 1, 1)
-        self.conv_1x1_output = nn.Conv2d(depth * 4, depth, 1, 1)
+        self.conv_1x1_output = nn.Conv2d(depth * 3, depth, 1, 1)
 
     def forward(self, x):
-        size = x.shape[2:]
-
-        image_features = self.mean(x)
-        image_features = self.conv(image_features)
-        image_features = F.upsample(image_features, size=size, mode='bilinear')
+        # size = x.shape[2:]
+        #
+        # image_features = self.mean(x)
+        # image_features = self.conv(image_features)
+        # image_features = F.upsample(image_features, size=size, mode='bilinear')
 
         # atrous_block1 = self.atrous_block1(x)
         # atrous_block6 = self.atrous_block6(x)
@@ -59,7 +59,7 @@ class ASPP(nn.Module):
         atrous_block4 = self.atrous_block4(x)
         atrous_block8 = self.atrous_block8(x)
 
-        net = self.conv_1x1_output(torch.cat([image_features, atrous_block2, atrous_block4, atrous_block8], dim=1))
+        net = self.conv_1x1_output(torch.cat([atrous_block2, atrous_block4, atrous_block8], dim=1))
 
         return net
 

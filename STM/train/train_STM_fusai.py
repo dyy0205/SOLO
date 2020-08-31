@@ -128,7 +128,10 @@ def Run_video_motion(model, batch, Mem_every=None, Mem_number=None, mode='train'
 
 
 def Run_video_sp(model, batch, Mem_every=None, Mem_number=None, mode='train'):
-    Fs, Ms, Ps, info = batch['Fs'], batch['Ms'], batch['Ps'], batch['info']
+    if mode == 'train':
+        Fs, Ms, Ps, info = batch['Fs'], batch['Ms'], batch['Ps'], batch['info']
+    else:
+        Fs, Ms, info = batch['Fs'], batch['Ms'], batch['info']
     num_frames = info['num_frames'][0].item()
     intervals = info['intervals']
     if Mem_every:
@@ -159,7 +162,10 @@ def Run_video_sp(model, batch, Mem_every=None, Mem_number=None, mode='train'):
             this_values_m = torch.cat([values, pre_value], dim=2)
 
         # segment
-        prev_mask = Ps[:, :, t - 1].float()
+        if mode == 'train':
+            prev_mask = Ps[:, :, t - 1].float()
+        else:
+            prev_mask = torch.round(Es[:, :, t - 1]).float()
         logits, p_m2, p_m3 = model([Fs[:, :, t], this_keys_m, this_values_m, prev_mask])
         em = F.softmax(logits, dim=1)[:, 1]  # B h w
         Es[:, 0, t] = em
@@ -504,8 +510,7 @@ def validate(args, val_loader, model):
         # error_nums = 0
         with torch.no_grad():
             name = info['name']
-            loss_video, video_mIou = run_fun(model, Fs, Ms, info, Mem_every=5, Mem_number=None,
-                                             mode='val')
+            loss_video, video_mIou = run_fun(model, batch, Mem_every=5, Mem_number=None, mode='val')
             loss_all_videos += loss_video
             miou_all_videos += video_mIou
             progressbar.set_description(
