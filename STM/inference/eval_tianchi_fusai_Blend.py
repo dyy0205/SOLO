@@ -32,6 +32,7 @@ from STM.tools.tianchi_eval_vos import calculate_videos_miou
 from STM.train.train_STM_fusai import *
 from STM.tools.utils import _loss, get_video_mIoU
 
+
 # torch.set_grad_enabled(False)  # Volatile
 
 
@@ -848,9 +849,10 @@ if __name__ == '__main__':
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
-    OL = True
+    OL = False
     OL_LR = 1e-7
     OL_TARGET_SHAPE = (864, 480)
+
     TARGET_SHAPE = (1008, 560)
     # TARGET_SHAPE = (864, 480)
     SCORE_THR = 0.3
@@ -871,3 +873,6 @@ if __name__ == '__main__':
         generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
         miou, num, miou2 = calculate_videos_miou(MERGE_PATH, GT_PATH)
         print('offline evaluation miou: {:.3f}, instances miou: {:.3f}, {} videos counted'.format(miou, miou2, num))
+        with open(os.path.join(MERGE_PATH, 'result.txt'), 'w') as f:
+            f.write(
+                'offline evaluation miou: {:.3f}, instances miou: {:.3f}, {} videos counted'.format(miou, miou2, num))
