@@ -63,8 +63,8 @@ def parse_args():
 
 def Run_video_motion(model, batch, Mem_every=None, Mem_number=None, mode='train'):
     Fs, Ms, info = batch['Fs'], batch['Ms'], batch['info']
-    num_frames = info['num_frames'][0].item()
-    intervals = info['intervals']
+    num_frames = Fs.shape[2]
+    # intervals = info['intervals']
     if Mem_every:
         to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
     elif Mem_number:
@@ -77,15 +77,14 @@ def Run_video_motion(model, batch, Mem_every=None, Mem_number=None, mode='train'
     Es[:, :, 0] = Ms[:, :, 0]
 
     loss_video = torch.tensor(0.0).cuda()
-    loss_total = torch.tensor(0.0).cuda()
 
     for t in range(1, num_frames):
-        interval = intervals[t][0].item()
-        if mode == 'train':
-            if interval != 1:
-                model.module.Memory.eval()
-            else:
-                model.module.Memory.train()
+        # interval = intervals[t][0].item()
+        # if mode == 'train':
+        #     if interval != 1:
+        #         model.module.Memory.eval()
+        #     else:
+        #         model.module.Memory.train()
         # memorize
         pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
         pre_key = pre_key.unsqueeze(2)
@@ -107,7 +106,6 @@ def Run_video_motion(model, batch, Mem_every=None, Mem_number=None, mode='train'
         if mode == 'train' or mode == 'val':
             Ms_cuda = Ms[:, 0, t].cuda()
             loss_video += _loss(logits, Ms_cuda) + 0.5 * _loss(p_m2, Ms_cuda) + 0.25 * _loss(p_m3, Ms_cuda)
-            loss_total = loss_video
 
         # update key and value
         if t - 1 in to_memorize:
@@ -121,7 +119,7 @@ def Run_video_motion(model, batch, Mem_every=None, Mem_number=None, mode='train'
             video_mIoU = video_mIoU + get_video_mIoU(pred[n], Ms[n].cuda())  # mIOU of video(t frames) for each batch
         video_mIoU = video_mIoU / len(Ms)  # mean IoU among batch
 
-        return loss_total / num_frames, video_mIoU
+        return loss_video / num_frames, video_mIoU
 
     elif mode == 'test':
         return pred, Es
@@ -132,8 +130,7 @@ def Run_video_sp(model, batch, Mem_every=None, Mem_number=None, mode='train'):
         Fs, Ms, Ps, info = batch['Fs'], batch['Ms'], batch['Ps'], batch['info']
     else:
         Fs, Ms, info = batch['Fs'], batch['Ms'], batch['info']
-    num_frames = info['num_frames'][0].item()
-    intervals = info['intervals']
+    num_frames = Fs.shape[2]
     if Mem_every:
         to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
     elif Mem_number:
@@ -146,10 +143,8 @@ def Run_video_sp(model, batch, Mem_every=None, Mem_number=None, mode='train'):
     Es[:, :, 0] = Ms[:, :, 0]
 
     loss_video = torch.tensor(0.0).cuda()
-    loss_total = torch.tensor(0.0).cuda()
 
     for t in range(1, num_frames):
-        interval = intervals[t][0].item()
         # memorize
         pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
         pre_key = pre_key.unsqueeze(2)
@@ -174,7 +169,6 @@ def Run_video_sp(model, batch, Mem_every=None, Mem_number=None, mode='train'):
         if mode == 'train' or mode == 'val':
             Ms_cuda = Ms[:, 0, t].cuda()
             loss_video += _loss(logits, Ms_cuda) + 0.5 * _loss(p_m2, Ms_cuda) + 0.25 * _loss(p_m3, Ms_cuda)
-            loss_total = loss_video
 
         # update key and value
         if t - 1 in to_memorize:
@@ -188,7 +182,7 @@ def Run_video_sp(model, batch, Mem_every=None, Mem_number=None, mode='train'):
             video_mIoU = video_mIoU + get_video_mIoU(pred[n], Ms[n].cuda())  # mIOU of video(t frames) for each batch
         video_mIoU = video_mIoU / len(Ms)  # mean IoU among batch
 
-        return loss_total / num_frames, video_mIoU
+        return loss_video / num_frames, video_mIoU
 
     elif mode == 'test':
         return pred, Es
