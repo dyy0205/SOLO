@@ -167,13 +167,17 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                     reserve = list(range(len(ious)))
                     if sum(ious >= IOU1) >= 1:
                         same_idx = np.argmax(ious)
-                        Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
-                        reserve.remove(same_idx)
-                        to_memorize.append(t)
+                        mask = torch.from_numpy(masks[same_idx]).cuda()
+                        if get_video_mIoU(mask, torch.round(Es[:, 0, t - 1])) \
+                            > get_video_mIoU(pred, torch.round(Es[:, 0, t - 1])):
+                                Es[:, 0, t] = mask
+                                reserve.remove(same_idx)
+                                to_memorize.append(t)
 
                     for i, iou in enumerate(ious):
-                        if iou >= IOU2 and iou < IOU1:
-                            reserve.remove(i)
+                        if iou >= IOU2 and iou <= IOU1:
+                            if i in reserve:
+                                reserve.remove(i)
 
                     reserve_result = []
                     for n in range(3):
@@ -234,13 +238,17 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                     reserve = list(range(len(ious)))
                     if sum(ious >= IOU1) >= 1:
                         same_idx = np.argmax(ious)
-                        Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
-                        reserve.remove(same_idx)
-                        to_memorize.append(t)
+                        mask = torch.from_numpy(masks[same_idx]).cuda()
+                        if get_video_mIoU(mask, torch.round(Es[:, 0, t + 1])) \
+                                > get_video_mIoU(pred, torch.round(Es[:, 0, t + 1])):
+                            Es[:, 0, t] = mask
+                            reserve.remove(same_idx)
+                            to_memorize.append(t)
 
                     for i, iou in enumerate(ious):
-                        if iou >= IOU2 and iou < IOU1:
-                            reserve.remove(i)
+                        if iou >= IOU2 and iou <= IOU1:
+                            if i in reserve:
+                                reserve.remove(i)
 
                     reserve_result = []
                     for n in range(3):
@@ -870,7 +878,7 @@ if __name__ == '__main__':
     if MODE == 'online':
         zip_result(MERGE_PATH, SAVE_PATH)
     else:
-        generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
+        # generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
         miou, num, miou2 = calculate_videos_miou(MERGE_PATH, GT_PATH)
         print('offline evaluation miou: {:.3f}, instances miou: {:.3f}, {} videos counted'.format(miou, miou2, num))
         with open(os.path.join(MERGE_PATH, 'result.txt'), 'w') as f:

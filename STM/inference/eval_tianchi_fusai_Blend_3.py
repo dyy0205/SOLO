@@ -33,6 +33,7 @@ from STM.tools.tianchi_eval_vos import calculate_videos_miou
 from STM.train.train_STM_fusai import *
 from STM.tools.utils import _loss, get_video_mIoU
 
+
 # torch.set_grad_enabled(False)  # Volatile
 
 
@@ -408,6 +409,7 @@ def vos_inference():
             video_name = seq_name.split('_')[0]
         else:
             video_name = seq_name
+        ORI_SHAPE.setdefault(video_name, ori_shape[::-1])
         seg_results = mask_inference(video_name, target_shape, SOLO_INTERVAL)
 
         frame_list = VIDEO_FRAMES[video_name]
@@ -428,7 +430,7 @@ def vos_inference():
             #     img_E = img_E.resize(ori_shape[::-1])
             #     img_E.save(os.path.join(test_path, '{}.png'.format(frame_list[f])))
 
-            with open(os.path.join(test_path, '{}.pkl'.format(instance)), 'w') as f:
+            with open(os.path.join(test_path, '{}.pkl'.format(instance)), 'wb') as f:
                 pickle.dump(Es, f)
 
 
@@ -723,32 +725,48 @@ def merge_results(tmp_dir, merge_dir, data_dir):
         if len(ins) == 1:
             # only one instance, no need for blend
             path = os.path.join(tmp_dir, name + '_1', '1.pkl')
-            with open(path, 'r') as f:
+            preds = []
+            with open(path, 'rb') as f:
                 Es = pickle.load(f)
-            pred = np.round(Es)
-            for t in range(num_frames):
-                path = os.path.join(tmp_dir, name + '_1', '{}.png'.format(VIDEO_FRAMES[name][t]))
-                mask = Image.open(path).convert('P')
-                mask.putpalette(palette)
-                mask.save(os.path.join(video_dir, '{}.png'.format(VIDEO_FRAMES[name][t])))
+                preds.append(Es)
+            background = 1 - Es
+            preds.insert(0, background)
+            # for t in range(num_frames):
+            #     path = os.path.join(tmp_dir, name + '_1', '{}.png'.format(VIDEO_FRAMES[name][t]))
+            #     mask = Image.open(path).convert('P')
+            #     mask.putpalette(palette)
+            #     mask.save(os.path.join(video_dir, '{}.png'.format(VIDEO_FRAMES[name][t])))
         else:
-            path = os.path.join(tmp_dir, name + '_{}'.format(1),
-                                '{}.png'.format(VIDEO_FRAMES[name][0]))
-            temp_ = np.array(Image.open(path).convert('P'), dtype=np.uint8)
+            preds = []
+            for i in range(len(ins)):
+                path = os.path.join(tmp_dir, name + '_{}'.format(i + 1), '{}.pkl'.format(i + 1))
+                with open(path, 'rb') as f:
+                    Es = pickle.load(f)
+                preds.append(Es)
+            background = torch.cat(preds, dim=1)
+            background = 1 - torch.max(background, dim=1)[0].unsqueeze(1)
+            preds.insert(0, background)
+            merge = soft_aggregation(preds)
+            max_score, idx = torch.max(merge, dim=1)
+            mask = max_score >= 0.5
+            ins_map = mask * idx
             for t in range(num_frames):
-                mask = np.zeros_like(temp_)
-                for j in list(range(1, len(ins) + 1))[::-1]:
-                    path = os.path.join(tmp_dir, name + '_{}'.format(j),
-                                        '{}.png'.format(VIDEO_FRAMES[name][t]))
-                    temp = np.array(Image.open(path).convert('P'), dtype=np.uint8)
-                    if j in match_dict.keys():
-                        j = match_dict[j]
-                    mask[(temp == 1) & ((mask > j) | (mask == 0))] = j
-                # print(len(ins), np.unique(mask))
+                mask = ins_map[0, t].cpu().numpy().astype(np.uint8)
                 mask = Image.fromarray(mask)
                 mask.putpalette(palette)
+                mask = mask.resize(ORI_SHAPE[name])
                 mask.save(os.path.join(video_dir, '{}.png'.format(VIDEO_FRAMES[name][t])))
 
+
+def soft_aggregation(tmp_results):
+    num_ins = len(tmp_results)
+    b, c, t, h, w = tmp_results[0].shape
+    merge = torch.empty((b, num_ins, t, h, w))
+    cat = torch.cat([(tmp_results[j] / (1 - tmp_results[j] + 1e-9)).unsqueeze(0) for j in range(num_ins)], dim=0)
+    sum = torch.sum(cat, dim=0)
+    for i in range(num_ins):
+        merge[:, i, :, :, :] = (tmp_results[i] / (1 - tmp_results[i] + 1e-9)) / sum
+    return merge
 
 @fn_timer
 def zip_result(result_dir, save_path):
@@ -905,7 +923,7 @@ if __name__ == '__main__':
         MODEL_NAME = 'motion'
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
-        IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
+        IMG_ROOT = '/workspace/dataset/VOS/test_dataset/JPEGImages/'
         MODEL_PATH = '/workspace/solo/backup_models/STM/dyy_ckpt_124e.pth'
         # MODEL_PATH = '/workspace/solo/backup_models/motion_crop_ckpt_44e.pth' # aspp + motion
         # MODEL_PATH = '/workspace/solo/backup_models/enhanced2_interval7.pth'
@@ -931,15 +949,16 @@ if __name__ == '__main__':
 
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
+    ORI_SHAPE = {}
 
-    OL = True
+    OL = False
     OL_LR = 1e-7
     OL_TARGET_SHAPE = (864, 480)
     TARGET_SHAPE = (1008, 560)
     # TARGET_SHAPE = (864, 480)
     SCORE_THR = 0.3
     SOLO_INTERVAL = 2
-    MAX_NUM = 8
+    MAX_NUM = 4
     IOU1 = 0.5
     IOU2 = 0.1
     BLEND_IOU_THR = 1
@@ -948,7 +967,7 @@ if __name__ == '__main__':
 
     generate_imagesets()
     vos_inference()
-    blend_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
+    merge_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
     if MODE == 'online':
         zip_result(MERGE_PATH, SAVE_PATH)
     else:
