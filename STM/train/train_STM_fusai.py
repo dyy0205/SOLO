@@ -609,7 +609,7 @@ def train(args, optimizer, train_loader, model, epochs, epoch_start=0, lr=1e-5):
         # save checkpoints
         if (epoch + 1) % args.save_interval == 0:
             print('saving checkpoints...')
-            ckpt_dir = os.path.join(args.work_dir, "ckpt", DATETIME)
+            ckpt_dir = os.path.join(args.work_dir, DATETIME)
             if not os.path.exists(ckpt_dir):
                 os.makedirs(ckpt_dir)
             torch.save({
@@ -651,6 +651,8 @@ def _model(model_name):
     elif model_name == 'sp':
         from STM.models.model_fusai_spatial_prior import STM
         model = STM()
+        model.eval()
+        model.Decoder.train()
 
     return model
 
@@ -674,7 +676,10 @@ def _run(model_name):
 
 if __name__ == '__main__':
     args = parse_args()
-    TARGET_SHAPE = (1088, 384)
+    TRAIN_SHAPE = (864, 480)
+    VAL_SHAPE = (864, 480)
+    TRAIN_SET = 'tianchi_train.txt'
+    VAL_SET = 'tianchi_val.txt'
 
     if not os.path.exists(args.work_dir):
         os.makedirs(args.work_dir)
@@ -705,8 +710,8 @@ if __name__ == '__main__':
     DAVIS_ROOT = args.davis
     palette = Image.open(DAVIS_ROOT + '/Annotations/606332/00000.png').getpalette()
 
-    val_dataset = TIANCHI(DAVIS_ROOT, phase='val', imset='tianchi_val.txt', separate_instance=True,
-                          target_size=TARGET_SHAPE, same_frames=False)
+    val_dataset = TIANCHI(DAVIS_ROOT, phase='val', imset=VAL_SET, separate_instance=True,
+                          target_size=VAL_SHAPE, same_frames=False)
     val_loader = data.DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 
     model = nn.DataParallel(model)
@@ -761,16 +766,16 @@ if __name__ == '__main__':
             log.logger.info('Training interval:{}'.format(i))
             # prepare training data
             if model_name == 'sp':
-                train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train.txt', separate_instance=True,
-                                        only_single=False, target_size=TARGET_SHAPE, clip_size=clip_size,
+                train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset=TRAIN_SET, separate_instance=True,
+                                        only_single=False, target_size=TRAIN_SHAPE, clip_size=clip_size,
                                         mode='sequence', interval=i, train_aug=args.train_aug, add_prev_mask=True)
             elif model_name == 'motion':
-                train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train.txt', separate_instance=True,
-                                        only_single=False, target_size=TARGET_SHAPE, clip_size=clip_size,
+                train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset=TRAIN_SET, separate_instance=True,
+                                        only_single=False, target_size=TRAIN_SHAPE, clip_size=clip_size,
                                         mode='sequence', interval=i, train_aug=args.train_aug, keep_one_prev=True)
             else:
-                train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset='tianchi_train.txt', separate_instance=True,
-                                        only_single=False, target_size=TARGET_SHAPE, clip_size=clip_size,
+                train_dataset = TIANCHI(DAVIS_ROOT, phase='train', imset=TRAIN_SET, separate_instance=True,
+                                        only_single=False, target_size=TRAIN_SHAPE, clip_size=clip_size,
                                         mode='sequence', interval=i, train_aug=args.train_aug)
             train_loader = data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0,
                                            pin_memory=True)

@@ -29,6 +29,7 @@ from STM.tools.generate_videos import generate_videos
 from STM.dataloader.fusai_dataset import TIANCHI_FUSAI
 from STM.tools.process_dir import process_tianchi_dir
 from STM.tools.tianchi_eval_vos import calculate_videos_miou
+from STM.train.train_STM_fusai import *
 
 torch.set_grad_enabled(False)  # Volatile
 
@@ -182,7 +183,6 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
             if t - 1 in to_memorize:
                 keys, values = this_keys_m, this_values_m
 
-
         # to_memorize = [start_frame - int(i) for i in np.arange(0, start_frame + 1, step=Mem_every)]
         to_memorize = [start_frame]
         for t in list(range(0, start_frame))[::-1]:  # frames before
@@ -262,6 +262,110 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
 
 
 @fn_timer
+def online_learning():
+    print('online learning...')
+    Testset = TIANCHI_FUSAI(DATA_ROOT, imset='test.txt', target_size=TARGET_SHAPE)
+    print('Total test videos: {}'.format(len(Testset)))
+    Testloader = data.DataLoader(Testset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
+
+    model = nn.DataParallel(MODEL)
+    if torch.cuda.is_available():
+        model.cuda()
+    # model.eval()  # turn-off BN
+    model.train()
+    # freeze bn
+    for m in model.modules():
+        if isinstance(m, nn.BatchNorm2d):
+            m.eval()
+
+    optimizer = torch.optim.Adam(model.parameters(), OL_LR, betas=(0.9, 0.99))
+
+    print('Loading weights:', MODEL_PATH)
+    model_ = torch.load(MODEL_PATH)
+    if 'state_dict' in model_.keys():
+        state_dict = model_['state_dict']
+    else:
+        state_dict = model_
+    model.load_state_dict(state_dict)
+
+    if 'optimizer' in model_.keys():
+        try:
+            optimizer.load_state_dict(model_['optimizer'])
+        except Exception as e:
+            print(e)
+
+    print('Start online learning...')
+    progressbar = tqdm.tqdm(Testloader)
+
+    for V in progressbar:
+        Fs, info = V
+        seq_name = info['name'][0]
+        ori_shape = info['ori_shape']
+        target_shape = info['target_shape']
+        target_shape = (target_shape[0].cpu().numpy()[0], target_shape[1].cpu().numpy()[0])
+        num_frames = info['num_frames'][0].item()
+        if '_' in seq_name:
+            video_name = seq_name.split('_')[0]
+        else:
+            video_name = seq_name
+        seg_results = mask_inference(video_name, target_shape, 1)
+        ol_clip_frames = 3
+        seg_result_idx = [i[3] for i in seg_results]
+        start_frame_idx = np.argmax([max(i[2]) if i[2] != [] else 0 for i in seg_results])
+        start_frame = seg_result_idx[start_frame_idx]
+        start_mask = seg_results[start_frame_idx][0][0].astype(np.uint8)
+
+        Ms = torch.empty((1, 1, ol_clip_frames) + OL_TARGET_SHAPE)
+        Ps = torch.empty((1, 1, ol_clip_frames - 1) + OL_TARGET_SHAPE)
+        complete_flag = True
+        masks = []
+        masks.append(start_mask)
+        if start_frame_idx + ol_clip_frames <= len(seg_results):
+            # train after
+            frames = [seg_result_idx[start_frame_idx + i] for i in range(ol_clip_frames)]
+            result_idxs = [start_frame_idx + i for i in range(ol_clip_frames)]
+            for i in range(ol_clip_frames):
+                seg_result = seg_results[result_idxs[i]]
+                if seg_result[0] == []:
+                    complete_flag = False
+                    break
+                else:
+                    ious = []
+                    for mask in seg_result[0]:
+                        iou = get_video_mIoU(start_mask, mask)
+                        ious.append(iou)
+                    if np.max(ious) >= 0.5:
+                        mi = np.argmax(ious)
+                        masks.append(seg_result[0][mi])
+                    else:
+                        complete_flag = False
+                        break
+            if complete_flag and len(masks) == ol_clip_frames:
+                for i, mask in enumerate(masks):
+                    Ms[:, :, i] = mask
+                    if i != 0:
+                        Ps[:, :, i - 1] = mask
+                Fs = Fs[:, :, frames]
+                optimizer.zero_grad()
+                loss_video, video_mIou = Run_video_sp(model, {'Fs': Fs, 'Ms': Ms, 'Ps': Ps, 'info': info},
+                                                      Mem_every=1,
+                                                      mode='train')
+                # backward
+                loss_video.backward()
+                optimizer.step()
+            else:
+                continue
+
+        frame_list = VIDEO_FRAMES[video_name]
+
+        print('[{}]: num_frames: {}'.format(seq_name, num_frames))
+
+        results = Run_video(model, Fs, seg_results, num_frames, Mem_every=5, model_name=MODEL_NAME)
+
+    return model
+
+
+@fn_timer
 def vos_inference():
     # Model and version
     if torch.cuda.is_available():
@@ -271,18 +375,21 @@ def vos_inference():
     print('Total test videos: {}'.format(len(Testset)))
     Testloader = data.DataLoader(Testset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 
-    model = nn.DataParallel(MODEL)
-    if torch.cuda.is_available():
-        model.cuda()
-    model.eval()  # turn-off BN
+    if not OL:
+        model = nn.DataParallel(MODEL)
+        if torch.cuda.is_available():
+            model.cuda()
+        model.eval()  # turn-off BN
 
-    print('Loading weights:', MODEL_PATH)
-    model_ = torch.load(MODEL_PATH)
-    if 'state_dict' in model_.keys():
-        state_dict = model_['state_dict']
+        print('Loading weights:', MODEL_PATH)
+        model_ = torch.load(MODEL_PATH)
+        if 'state_dict' in model_.keys():
+            state_dict = model_['state_dict']
+        else:
+            state_dict = model_
+        model.load_state_dict(state_dict)
     else:
-        state_dict = model_
-    model.load_state_dict(state_dict)
+        model = online_learning()
 
     code_name = 'Tianchi fusai'
     # date = datetime.datetime.strftime(datetime.datetime.now(), '%y%m%d%H%M')
@@ -300,7 +407,7 @@ def vos_inference():
             video_name = seq_name.split('_')[0]
         else:
             video_name = seq_name
-        seg_results = mask_inference(video_name, target_shape)
+        seg_results = mask_inference(video_name, target_shape, SOLO_INTERVAL)
 
         frame_list = VIDEO_FRAMES[video_name]
 
@@ -322,9 +429,11 @@ def vos_inference():
 
 
 def get_video_mIoU(predn, all_Mn):  # [c,t,h,w]
-    pred = predn.squeeze().cpu().data.numpy()
+    if isinstance(predn, torch.Tensor):
+        pred = predn.squeeze().cpu().data.numpy()
     # np.save('blackswan.npy', pred)
-    gt = all_Mn.squeeze().cpu().data.numpy()  # [t,h,w]
+    if isinstance(all_Mn, torch.Tensor):
+        gt = all_Mn.squeeze().cpu().data.numpy()  # [t,h,w]
     agg = pred + gt
     i = float(np.sum(agg == 2))
     u = float(np.sum(agg > 0))
@@ -339,7 +448,7 @@ def get_img_miou(img1, img2):
 
 
 @fn_timer
-def mask_inference(video_name, mask_shape):
+def mask_inference(video_name, mask_shape, interval):
     # build the model from a config file and a checkpoint file
     print('Generating frame mask...')
     model = init_detector(CONFIG_FILE, CKPT_FILE, device='cuda:0')
@@ -348,7 +457,6 @@ def mask_inference(video_name, mask_shape):
     frames = VIDEO_FRAMES.get(video_name)
     fi = []
     i = 0
-    interval = SOLO_INTERVAL
     while True:
         fi.append(i)
         i += interval
@@ -553,6 +661,7 @@ def blend_results(tmp_dir, merge_dir, data_dir):
                 mask.putpalette(palette)
                 mask.save(os.path.join(video_dir, '{}.png'.format(VIDEO_FRAMES[name][t])))
 
+
 @fn_timer
 def zip_result(result_dir, save_path):
     print('Generating zip file...')
@@ -735,6 +844,9 @@ if __name__ == '__main__':
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
+    OL = True
+    OL_LR = 1e-7
+    OL_TARGET_SHAPE = (864, 480)
     TARGET_SHAPE = (1008, 560)
     # TARGET_SHAPE = (864, 480)
     SCORE_THR = 0.3

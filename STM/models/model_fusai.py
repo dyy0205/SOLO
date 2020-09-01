@@ -222,7 +222,7 @@ class Memory(nn.Module):
             if not np.any(m_):
                 m_ = np.ones_like(m_)
             m_ *= 255
-            m_ = cv2.GaussianBlur(m_, (11, 11), 0, 0)
+            m_ = cv2.GaussianBlur(m_, (7, 7), 0, 0)
             m_ = torch.from_numpy(m_).unsqueeze(0)
             m_ /= 255
             p_mask[i] = m_
