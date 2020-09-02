@@ -296,15 +296,14 @@ def ol_aug(image, mask):
         # iaa.PadToFixedSize(width=crop_size[0], height=crop_size[1]),
         # iaa.CropToFixedSize(width=crop_size[0], height=crop_size[1]),
         iaa.Affine(
-            scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
+            scale={"x": (0.9, 1.1), "y": (0.9, 1.1)},
             # scale images to 90-110% of their size, individually per axis
-            translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
+            translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)},
             # translate by -10 to +10 percent (per axis)
-            rotate=(-8, 8),  # rotate by -5 to +5 degrees
-            shear=(-5, 5),  # shear by -3 to +3 degrees
+            rotate=(-5, 5),  # rotate by -5 to +5 degrees
+            shear=(-3, 3),  # shear by -3 to +3 degrees
         ),
-        iaa.Cutout(nb_iterations=(1, 5), size=0.2, cval=0, squared=False),
-
+        # iaa.Cutout(nb_iterations=(1, 5), size=0.2, cval=0, squared=False),
     ], random_order=False)  # apply augmenters in random order
 
     seq_f = iaa.Sequential([
@@ -951,7 +950,7 @@ if __name__ == '__main__':
         CKPT_FILE = r'/workspace/solo/code/user_data/model_data/solov2_9cls.pth'
         TEMPLATE_MASK = r'/workspace/solo/code/user_data/template_data/00001.png'
         VIDEO_PATH = '/workspace/solo/code/user_data/video_data'
-        GT_PATH = r'/workspace/dataset/VOS/fusai_train/Annotations/'
+        GT_PATH = r'/workspace/dataset/VOS/tianchiyusai/Annotations/'
 
         MODEL_NAME = 'sp'
 
@@ -965,11 +964,11 @@ if __name__ == '__main__':
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
-    OL = False
-    OL_LR = 1e-8
+    OL = True
+    OL_LR = 2e-8
     OL_TARGET_SHAPE = (864, 480)
     OL_CLIPS = 3
-    OL_ITER_PER_VIDEO = 5
+    OL_ITER_PER_VIDEO = 20
 
     TARGET_SHAPE = (1008, 560)
     # TARGET_SHAPE = (864, 480)
@@ -988,7 +987,7 @@ if __name__ == '__main__':
     if MODE == 'online':
         zip_result(MERGE_PATH, SAVE_PATH)
     else:
-        # generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
+        generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
         miou, num, miou2 = calculate_videos_miou(MERGE_PATH, GT_PATH)
         print('offline evaluation miou: {:.3f}, instances miou: {:.3f}, {} videos counted'.format(miou, miou2, num))
         with open(os.path.join(MERGE_PATH, 'result.txt'), 'w') as f:

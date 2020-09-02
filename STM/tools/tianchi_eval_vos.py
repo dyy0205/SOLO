@@ -28,7 +28,7 @@ def calculate_videos_miou(pred_dir, ann_dir):
 
 
 def get_video_miou(video_dir, gt_dir):
-    assert os.listdir(video_dir) == os.listdir(gt_dir)
+    # assert os.listdir(video_dir) == os.listdir(gt_dir)
     pred_labels = set([])
     gt_labels = set([])
     iou_d = {}
