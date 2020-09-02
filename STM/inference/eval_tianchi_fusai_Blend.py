@@ -296,25 +296,33 @@ def ol_aug(image, mask):
         # iaa.PadToFixedSize(width=crop_size[0], height=crop_size[1]),
         # iaa.CropToFixedSize(width=crop_size[0], height=crop_size[1]),
         iaa.Affine(
-            scale={"x": (0.9, 1.1), "y": (0.9, 1.1)},
+            scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
             # scale images to 90-110% of their size, individually per axis
-            translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)},
+            translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
             # translate by -10 to +10 percent (per axis)
-            rotate=(-5, 5),  # rotate by -5 to +5 degrees
-            shear=(-3, 3),  # shear by -3 to +3 degrees
-        )
+            rotate=(-8, 8),  # rotate by -5 to +5 degrees
+            shear=(-5, 5),  # shear by -3 to +3 degrees
+        ),
+        iaa.Cutout(nb_iterations=(1, 5), size=0.2, cval=0, squared=False),
+
     ], random_order=False)  # apply augmenters in random order
 
     seq_f = iaa.Sequential([
         iaa.Sometimes(0.5,
                       iaa.OneOf([
                           iaa.GaussianBlur((0.0, 3.0)),
-                          iaa.MotionBlur(k=(3, 7))
+                          iaa.MotionBlur(k=(3, 20)),
                       ]),
                       ),
-        iaa.Sometimes(0.5, iaa.LinearContrast((0.5, 2.0))),
-        iaa.Sometimes(0.5, iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.1 * 255), per_channel=0.5)),
-        # iaa.Sometimes(0.5, iaa.Multiply((0.8, 1.2), per_channel=0.2)),
+        iaa.Sometimes(0.5,
+                      iaa.OneOf([
+                          iaa.Multiply((0.8, 1.2), per_channel=0.2),
+                          iaa.MultiplyBrightness((0.5, 1.5)),
+                          iaa.LinearContrast((0.5, 2.0), per_channel=0.2),
+                          iaa.BlendAlpha((0., 1.), iaa.HistogramEqualization()),
+                          iaa.MultiplyHueAndSaturation((0.5, 1.5), per_channel=0.2),
+                      ]),
+                      ),
     ], random_order=False)
 
     combo_aug = np.array(seq_all.augment_images(images=combo))
@@ -364,7 +372,7 @@ def online_learning():
     progressbar = tqdm.tqdm(Testloader)
 
     for V in progressbar:
-        Fs, info = V
+        F, info = V
         seq_name = info['name'][0]
         ori_shape = info['ori_shape']
         target_shape = info['target_shape']
@@ -391,7 +399,7 @@ def online_learning():
             start_mask = frame[0][select_idx][np.newaxis, np.newaxis, :, :].transpose(0,2,3,1)
             score = frame[2][select_idx]
             frame_idx = frame[3]
-            start_frame = Fs[:, :, frame_idx].cpu().numpy().transpose(0,2,3,1)
+            start_frame = F[:, :, frame_idx].cpu().numpy().transpose(0,2,3,1)
 
             frames = []
             masks = []
@@ -399,13 +407,13 @@ def online_learning():
             masks.append(start_mask)
 
             for _ in range(ol_clip_frames - 1):
-                img_aug, mask_aug = ol_aug(start_frame * 255, start_mask)
-                frames.append(img_aug)
+                img_aug, mask_aug = ol_aug((start_frame * 255).astype(np.uint8), start_mask)
+                frames.append(img_aug / 255)
                 masks.append(mask_aug)
             prevs = masks[1:]
-            Fs = torch.from_numpy(np.concatenate([f[np.newaxis, ...] for f in frames], axis=0).transpose(1, 4, 0, 2, 3))
+            Fs = torch.from_numpy(np.concatenate([f[np.newaxis, ...] for f in frames], axis=0).transpose(1, 4, 0, 2, 3)).float()
             Ms = torch.from_numpy(np.concatenate([m[np.newaxis, ...] for m in masks], axis=0).transpose(1, 4, 0, 2, 3)).long()
-            Ps = torch.from_numpy(np.concatenate([p[np.newaxis, ...] for p in prevs], axis=0).transpose(1, 4, 0, 2, 3))
+            Ps = torch.from_numpy(np.concatenate([p[np.newaxis, ...] for p in prevs], axis=0).transpose(1, 4, 0, 2, 3)).float()
 
             optimizer.zero_grad()
             loss_video, video_mIou = Run_video_sp(model, {'Fs': Fs, 'Ms': Ms, 'Ps': Ps, 'info': info},
@@ -929,7 +937,8 @@ if __name__ == '__main__':
         MODEL_NAME = 'sp'
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
-        IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
+        # IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
+        IMG_ROOT = '/workspace/dataset/VOS/tianchi_val/JPEGImages/'
         MODEL_PATH = '/workspace/solo/backup_models/STM/sp_interval4.pth'
         # MODEL_PATH = '/workspace/solo/backup_models/motion_crop_ckpt_44e.pth' # aspp + motion
         # MODEL_PATH = '/workspace/solo/backup_models/enhanced2_interval7.pth'
@@ -957,7 +966,7 @@ if __name__ == '__main__':
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
     OL = False
-    OL_LR = 1e-7
+    OL_LR = 1e-8
     OL_TARGET_SHAPE = (864, 480)
     OL_CLIPS = 3
     OL_ITER_PER_VIDEO = 5
@@ -967,7 +976,7 @@ if __name__ == '__main__':
     SCORE_THR = 0.3
     SOLO_INTERVAL = 2
     MAX_NUM = 8
-    IOU1 = 0.3
+    IOU1 = 0.5
     # IOU2 = 0.1
     BLEND_IOU_THR = 1
 
