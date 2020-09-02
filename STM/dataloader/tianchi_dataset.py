@@ -376,9 +376,9 @@ class TIANCHI(data.Dataset):
             iaa.Sometimes(0.5,
                           iaa.OneOf([
                               iaa.Multiply((0.8, 1.2), per_channel=0.2),
-                              iaa.MultiplyBrightness(0.5, 1.5),
+                              iaa.MultiplyBrightness((0.5, 1.5)),
                               iaa.LinearContrast((0.5, 2.0), per_channel=0.2),
-                              iaa.Alpha((0., 1.), iaa.HistogramEqualization()),
+                              iaa.BlendAlpha((0., 1.), iaa.HistogramEqualization()),
                               iaa.MultiplyHueAndSaturation((0.5, 1.5), per_channel=0.2),
                           ]),
                           ),
