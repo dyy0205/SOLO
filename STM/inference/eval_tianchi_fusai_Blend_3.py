@@ -21,6 +21,7 @@ import random
 import numpy as np
 import tqdm
 import itertools
+import pickle
 
 ### My libs
 # from STM.models.model_fusai import STM
@@ -167,17 +168,13 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                     reserve = list(range(len(ious)))
                     if sum(ious >= IOU1) >= 1:
                         same_idx = np.argmax(ious)
-                        mask = torch.from_numpy(masks[same_idx]).cuda()
-                        if get_video_mIoU(mask, torch.round(Es[:, 0, t - 1])) \
-                            > get_video_mIoU(pred, torch.round(Es[:, 0, t - 1])):
-                                Es[:, 0, t] = mask
-                                reserve.remove(same_idx)
-                                to_memorize.append(t)
+                        Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
+                        reserve.remove(same_idx)
+                        to_memorize.append(t)
 
                     for i, iou in enumerate(ious):
-                        if iou >= IOU2 and iou <= IOU1:
-                            if i in reserve:
-                                reserve.remove(i)
+                        if iou >= IOU2 and iou < IOU1:
+                            reserve.remove(i)
 
                     reserve_result = []
                     for n in range(3):
@@ -238,17 +235,13 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                     reserve = list(range(len(ious)))
                     if sum(ious >= IOU1) >= 1:
                         same_idx = np.argmax(ious)
-                        mask = torch.from_numpy(masks[same_idx]).cuda()
-                        if get_video_mIoU(mask, torch.round(Es[:, 0, t + 1])) \
-                                > get_video_mIoU(pred, torch.round(Es[:, 0, t + 1])):
-                            Es[:, 0, t] = mask
-                            reserve.remove(same_idx)
-                            to_memorize.append(t)
+                        Es[:, 0, t] = torch.from_numpy(masks[same_idx]).cuda()
+                        reserve.remove(same_idx)
+                        to_memorize.append(t)
 
                     for i, iou in enumerate(ious):
-                        if iou >= IOU2 and iou <= IOU1:
-                            if i in reserve:
-                                reserve.remove(i)
+                        if iou >= IOU2 and iou < IOU1:
+                            reserve.remove(i)
 
                     reserve_result = []
                     for n in range(3):
@@ -264,7 +257,7 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
             seg_results[start_frame_idx][j].pop(0)
 
         pred = torch.round(Es.float())
-        results.append((pred, instance_idx))
+        results.append((Es.float(), instance_idx))
 
         instance_idx += 1
 
@@ -416,6 +409,7 @@ def vos_inference():
             video_name = seq_name.split('_')[0]
         else:
             video_name = seq_name
+        ORI_SHAPE.setdefault(video_name, ori_shape[::-1])
         seg_results = mask_inference(video_name, target_shape, SOLO_INTERVAL)
 
         frame_list = VIDEO_FRAMES[video_name]
@@ -425,16 +419,19 @@ def vos_inference():
         results = Run_video(model, Fs, seg_results, num_frames, Mem_every=5, model_name=MODEL_NAME)
 
         for result in results:
-            pred, instance = result
+            Es, instance = result
             test_path = os.path.join(TMP_PATH, seq_name + '_{}'.format(instance))
             if not os.path.exists(test_path):
                 os.makedirs(test_path)
 
-            for f in range(num_frames):
-                img_E = Image.fromarray(pred[0, 0, f].cpu().numpy().astype(np.uint8))
-                img_E.putpalette(PALETTE)
-                img_E = img_E.resize(ori_shape[::-1])
-                img_E.save(os.path.join(test_path, '{}.png'.format(frame_list[f])))
+            # for f in range(num_frames):
+            #     img_E = Image.fromarray(pred[0, 0, f].cpu().numpy().astype(np.uint8))
+            #     img_E.putpalette(PALETTE)
+            #     img_E = img_E.resize(ori_shape[::-1])
+            #     img_E.save(os.path.join(test_path, '{}.png'.format(frame_list[f])))
+
+            with open(os.path.join(test_path, '{}.pkl'.format(instance)), 'wb') as f:
+                pickle.dump(Es, f)
 
 
 def get_video_mIoU(predn, all_Mn):  # [c,t,h,w]
@@ -602,8 +599,81 @@ def analyse_images(data_root):
     return v_frames
 
 
+# @fn_timer
+# def blend_results(tmp_dir, merge_dir, data_dir):
+#     print('Blending results...')
+#     img_root = os.path.join(data_dir, 'JPEGImages')
+#     ann_root = os.path.join(data_dir, 'Annotations')
+#     # with open(os.path.join(data_dir, 'ImageSets/test.txt')) as f:
+#     #     test = f.readlines()
+#     # test = [img.strip() for img in test]
+#     test = os.listdir(tmp_dir)
+#     test = [name.split('_')[0] if '_' in name else name for name in test]
+#     test = np.unique(test)
+#
+#     print('test videos: ', len(test))
+#
+#     ins_lst = os.listdir(tmp_dir)
+#     names = []
+#     for name in ins_lst:
+#         name = name.split('_')[0]
+#         if name not in names:
+#             names.append(name)
+#     print(len(names))
+#
+#     for i, name in enumerate(test):
+#         num_frames = len(glob.glob(os.path.join(img_root, name, '*.jpg')))
+#         palette = PALETTE
+#         ins = [ins for ins in ins_lst if ins.startswith(name)]
+#         print(i, name, len(ins))
+#
+#         match_lst = get_tmp_match_lst(tmp_dir, ins, iou_thr=BLEND_IOU_THR)
+#
+#         match_dict = {}
+#         if len(match_lst) != 0:
+#             for m in match_lst:
+#                 ins1, ins2 = list(map(int, m.split('_')))
+#                 match_dict.setdefault(ins2, ins1)
+#         flag = True
+#         while flag:
+#             flag = False
+#             for k, v in match_dict.items():
+#                 if v in match_dict.keys():
+#                     match_dict[k] = match_dict[v]
+#                     flag = True
+#         print('Match tmp instance: {}'.format(match_dict))
+#
+#         video_dir = os.path.join(merge_dir, name)
+#         if not os.path.exists(video_dir):
+#             os.makedirs(video_dir)
+#         if len(ins) == 1:
+#             # only one instance, no need for blend
+#             for t in range(num_frames):
+#                 path = os.path.join(tmp_dir, name + '_1', '{}.png'.format(VIDEO_FRAMES[name][t]))
+#                 mask = Image.open(path).convert('P')
+#                 mask.putpalette(palette)
+#                 mask.save(os.path.join(video_dir, '{}.png'.format(VIDEO_FRAMES[name][t])))
+#         else:
+#             path = os.path.join(tmp_dir, name + '_{}'.format(1),
+#                                 '{}.png'.format(VIDEO_FRAMES[name][0]))
+#             temp_ = np.array(Image.open(path).convert('P'), dtype=np.uint8)
+#             for t in range(num_frames):
+#                 mask = np.zeros_like(temp_)
+#                 for j in list(range(1, len(ins) + 1))[::-1]:
+#                     path = os.path.join(tmp_dir, name + '_{}'.format(j),
+#                                         '{}.png'.format(VIDEO_FRAMES[name][t]))
+#                     temp = np.array(Image.open(path).convert('P'), dtype=np.uint8)
+#                     if j in match_dict.keys():
+#                         j = match_dict[j]
+#                     mask[(temp == 1) & ((mask > j) | (mask == 0))] = j
+#                 # print(len(ins), np.unique(mask))
+#                 mask = Image.fromarray(mask)
+#                 mask.putpalette(palette)
+#                 mask.save(os.path.join(video_dir, '{}.png'.format(VIDEO_FRAMES[name][t])))
+
+
 @fn_timer
-def blend_results(tmp_dir, merge_dir, data_dir):
+def merge_results(tmp_dir, merge_dir, data_dir):
     print('Blending results...')
     img_root = os.path.join(data_dir, 'JPEGImages')
     ann_root = os.path.join(data_dir, 'Annotations')
@@ -630,7 +700,10 @@ def blend_results(tmp_dir, merge_dir, data_dir):
         ins = [ins for ins in ins_lst if ins.startswith(name)]
         print(i, name, len(ins))
 
-        match_lst = get_tmp_match_lst(tmp_dir, ins, iou_thr=BLEND_IOU_THR)
+        if BLEND_IOU_THR < 1.0:
+            match_lst = get_tmp_match_lst(tmp_dir, ins, iou_thr=BLEND_IOU_THR)
+        else:
+            match_lst = []
 
         match_dict = {}
         if len(match_lst) != 0:
@@ -651,29 +724,49 @@ def blend_results(tmp_dir, merge_dir, data_dir):
             os.makedirs(video_dir)
         if len(ins) == 1:
             # only one instance, no need for blend
-            for t in range(num_frames):
-                path = os.path.join(tmp_dir, name + '_1', '{}.png'.format(VIDEO_FRAMES[name][t]))
-                mask = Image.open(path).convert('P')
-                mask.putpalette(palette)
-                mask.save(os.path.join(video_dir, '{}.png'.format(VIDEO_FRAMES[name][t])))
+            path = os.path.join(tmp_dir, name + '_1', '1.pkl')
+            preds = []
+            with open(path, 'rb') as f:
+                Es = pickle.load(f)
+                preds.append(Es)
+            background = 1 - Es
+            preds.insert(0, background)
+            # for t in range(num_frames):
+            #     path = os.path.join(tmp_dir, name + '_1', '{}.png'.format(VIDEO_FRAMES[name][t]))
+            #     mask = Image.open(path).convert('P')
+            #     mask.putpalette(palette)
+            #     mask.save(os.path.join(video_dir, '{}.png'.format(VIDEO_FRAMES[name][t])))
         else:
-            path = os.path.join(tmp_dir, name + '_{}'.format(1),
-                                '{}.png'.format(VIDEO_FRAMES[name][0]))
-            temp_ = np.array(Image.open(path).convert('P'), dtype=np.uint8)
+            preds = []
+            for i in range(len(ins)):
+                path = os.path.join(tmp_dir, name + '_{}'.format(i + 1), '{}.pkl'.format(i + 1))
+                with open(path, 'rb') as f:
+                    Es = pickle.load(f)
+                preds.append(Es)
+            background = torch.cat(preds, dim=1)
+            background = 1 - torch.max(background, dim=1)[0].unsqueeze(1)
+            preds.insert(0, background)
+            merge = soft_aggregation(preds)
+            max_score, idx = torch.max(merge, dim=1)
+            mask = max_score >= 0.5
+            ins_map = mask * idx
             for t in range(num_frames):
-                mask = np.zeros_like(temp_)
-                for j in list(range(1, len(ins) + 1))[::-1]:
-                    path = os.path.join(tmp_dir, name + '_{}'.format(j),
-                                        '{}.png'.format(VIDEO_FRAMES[name][t]))
-                    temp = np.array(Image.open(path).convert('P'), dtype=np.uint8)
-                    if j in match_dict.keys():
-                        j = match_dict[j]
-                    mask[(temp == 1) & ((mask > j) | (mask == 0))] = j
-                # print(len(ins), np.unique(mask))
+                mask = ins_map[0, t].cpu().numpy().astype(np.uint8)
                 mask = Image.fromarray(mask)
                 mask.putpalette(palette)
+                mask = mask.resize(ORI_SHAPE[name])
                 mask.save(os.path.join(video_dir, '{}.png'.format(VIDEO_FRAMES[name][t])))
 
+
+def soft_aggregation(tmp_results):
+    num_ins = len(tmp_results)
+    b, c, t, h, w = tmp_results[0].shape
+    merge = torch.empty((b, num_ins, t, h, w))
+    cat = torch.cat([(tmp_results[j] / (1 - tmp_results[j] + 1e-9)).unsqueeze(0) for j in range(num_ins)], dim=0)
+    sum = torch.sum(cat, dim=0)
+    for i in range(num_ins):
+        merge[:, i, :, :, :] = (tmp_results[i] / (1 - tmp_results[i] + 1e-9)) / sum
+    return merge
 
 @fn_timer
 def zip_result(result_dir, save_path):
@@ -830,7 +923,7 @@ if __name__ == '__main__':
         MODEL_NAME = 'motion'
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
-        IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
+        IMG_ROOT = '/workspace/dataset/VOS/test_dataset/JPEGImages/'
         MODEL_PATH = '/workspace/solo/backup_models/STM/dyy_ckpt_124e.pth'
         # MODEL_PATH = '/workspace/solo/backup_models/motion_crop_ckpt_44e.pth' # aspp + motion
         # MODEL_PATH = '/workspace/solo/backup_models/enhanced2_interval7.pth'
@@ -856,16 +949,16 @@ if __name__ == '__main__':
 
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
+    ORI_SHAPE = {}
 
     OL = False
     OL_LR = 1e-7
     OL_TARGET_SHAPE = (864, 480)
-
     TARGET_SHAPE = (1008, 560)
     # TARGET_SHAPE = (864, 480)
     SCORE_THR = 0.3
     SOLO_INTERVAL = 2
-    MAX_NUM = 8
+    MAX_NUM = 4
     IOU1 = 0.5
     IOU2 = 0.1
     BLEND_IOU_THR = 1
@@ -874,13 +967,10 @@ if __name__ == '__main__':
 
     generate_imagesets()
     vos_inference()
-    blend_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
+    merge_results(TMP_PATH, MERGE_PATH, DATA_ROOT)
     if MODE == 'online':
         zip_result(MERGE_PATH, SAVE_PATH)
     else:
-        # generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
+        generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
         miou, num, miou2 = calculate_videos_miou(MERGE_PATH, GT_PATH)
         print('offline evaluation miou: {:.3f}, instances miou: {:.3f}, {} videos counted'.format(miou, miou2, num))
-        with open(os.path.join(MERGE_PATH, 'result.txt'), 'w') as f:
-            f.write(
-                'offline evaluation miou: {:.3f}, instances miou: {:.3f}, {} videos counted'.format(miou, miou2, num))
