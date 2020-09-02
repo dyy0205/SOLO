@@ -66,7 +66,7 @@ class font:
 
 class TIANCHI(data.Dataset):
     '''
-    Dataset for YOUTUBE to train
+    Dataset for TIANCHI to train
     '''
 
     def __init__(self, root, phase='train', imset='2016/val.txt', separate_instance=False, only_single=False,
