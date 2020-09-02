@@ -651,8 +651,8 @@ def _model(model_name):
     elif model_name == 'sp':
         from STM.models.model_fusai_spatial_prior import STM
         model = STM()
-        model.eval()
-        model.Decoder.train()
+        # model.eval()
+        # model.Decoder.Aspp.train()
 
     return model
 
@@ -678,8 +678,8 @@ if __name__ == '__main__':
     args = parse_args()
     TRAIN_SHAPE = (864, 480)
     VAL_SHAPE = (864, 480)
-    TRAIN_SET = 'tianchi_train.txt'
-    VAL_SET = 'tianchi_val.txt'
+    TRAIN_SET = 'tianchi_train_cf.txt'
+    VAL_SET = 'tianchi_val_cf.txt'
 
     if not os.path.exists(args.work_dir):
         os.makedirs(args.work_dir)
@@ -719,10 +719,10 @@ if __name__ == '__main__':
     if torch.cuda.is_available():
         model.cuda()
 
-    # load weights.pth
-    if args.load_from:
-        print('load pretrained from:', args.load_from)
-        model.load_state_dict(torch.load(args.load_from), strict=False)
+    # # load weights.pth
+    # if args.load_from:
+    #     print('load pretrained from:', args.load_from)
+    #     model.load_state_dict(torch.load(args.load_from), strict=False)
     # resume_from
     if args.resume_from and args.mode == 'val':
         print('resume from:', args.resume_from)
