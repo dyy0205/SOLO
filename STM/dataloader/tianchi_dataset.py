@@ -292,10 +292,13 @@ class TIANCHI(data.Dataset):
                     iou = float(np.sum(mask_au)) / float(np.sum(N_masks[t]) + 1e-6)
                     ious.append(iou)
                     if np.sum(N_masks[t]) == 0 or (np.sum(N_masks[t]) > 0 and iou > 0.5):
-                        N_frames_.append(np.array(Image.fromarray(img_au[0]).resize(self.crop_size)) / 255.)
-                        N_masks_.append(np.array(Image.fromarray(mask_au).resize(self.crop_size)))
+                        N_frames_.append(img_au[0] / 255.)
+                        N_masks_.append(mask_au)
+                        # N_frames_.append(np.array(Image.fromarray(img_au[0]).resize(self.crop_size)) / 255.)
+                        # N_masks_.append(np.array(Image.fromarray(mask_au).resize(self.crop_size)))
                         if t > 0 and self.add_prev_mask:
-                            N_prevs_.append(np.array(Image.fromarray(prev_au).resize(self.crop_size)))
+                            N_prevs_.append(prev_au)
+                            # N_prevs_.append(np.array(Image.fromarray(prev_au).resize(self.crop_size)))
                         break
                     count += 1
                 if count >= 100:
@@ -306,10 +309,13 @@ class TIANCHI(data.Dataset):
                         img_au, mask_au, prev_au = tmp_result[idx]
                     else:
                         img_au, mask_au = tmp_result[idx]
-                    N_frames_.append(np.array(Image.fromarray(img_au[0]).resize(self.crop_size)) / 255.)
-                    N_masks_.append(np.array(Image.fromarray(mask_au).resize(self.crop_size)))
+                    N_frames_.append(img_au[0] / 255.)
+                    N_masks_.append(mask_au)
+                    # N_frames_.append(np.array(Image.fromarray(img_au[0]).resize(self.crop_size)) / 255.)
+                    # N_masks_.append(np.array(Image.fromarray(mask_au).resize(self.crop_size)))
                     if t > 0 and self.add_prev_mask:
-                        N_prevs_.append(np.array(Image.fromarray(prev_au).resize(self.crop_size)))
+                        N_prevs_.append(prev_au)
+                        # N_prevs_.append(np.array(Image.fromarray(prev_au).resize(self.crop_size)))
 
             assert len(N_frames_) == final_clip_size
             Fs = torch.from_numpy(np.array(N_frames_)).permute(3, 0, 1, 2).float()
@@ -346,8 +352,8 @@ class TIANCHI(data.Dataset):
 
         seq_all = iaa.Sequential([
             iaa.Fliplr(0.5),  # horizontal flips
-            iaa.PadToFixedSize(width=crop_size[0], height=crop_size[1]),
-            iaa.CropToFixedSize(width=crop_size[0], height=crop_size[1]),
+            # iaa.PadToFixedSize(width=crop_size[0], height=crop_size[1]),
+            # iaa.CropToFixedSize(width=crop_size[0], height=crop_size[1]),
             iaa.Affine(
                 scale={"x": (0.9, 1.1), "y": (0.9, 1.1)},
                 # scale images to 90-110% of their size, individually per axis
@@ -355,19 +361,27 @@ class TIANCHI(data.Dataset):
                 # translate by -10 to +10 percent (per axis)
                 rotate=(-5, 5),  # rotate by -5 to +5 degrees
                 shear=(-3, 3),  # shear by -3 to +3 degrees
-            )
+            ),
+            iaa.Cutout(nb_iterations=(1, 5), size=0.2, cval=0, squared=False),
+
         ], random_order=False)  # apply augmenters in random order
 
         seq_f = iaa.Sequential([
             iaa.Sometimes(0.5,
                           iaa.OneOf([
                               iaa.GaussianBlur((0.0, 3.0)),
-                              iaa.MotionBlur(k=(3, 7))
+                              iaa.MotionBlur(k=(3, 20)),
                           ]),
                           ),
-            iaa.Sometimes(0.5, iaa.LinearContrast((0.5, 2.0))),
-            iaa.Sometimes(0.5, iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.1 * 255), per_channel=0.5)),
-            iaa.Sometimes(0.5, iaa.Multiply((0.8, 1.2), per_channel=0.2)),
+            iaa.Sometimes(0.5,
+                          iaa.OneOf([
+                              iaa.Multiply((0.8, 1.2), per_channel=0.2),
+                              iaa.MultiplyBrightness(0.5, 1.5),
+                              iaa.LinearContrast((0.5, 2.0), per_channel=0.2),
+                              iaa.Alpha((0., 1.), iaa.HistogramEqualization()),
+                              iaa.MultiplyHueAndSaturation((0.5, 1.5), per_channel=0.2),
+                          ]),
+                          ),
         ], random_order=False)
 
         combo_aug = np.array(seq_all.augment_images(images=combo))
