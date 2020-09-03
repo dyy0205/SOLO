@@ -271,8 +271,8 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
         for j in range(3):
             seg_results[start_frame_idx][j].pop(0)
 
-        pred = torch.round(Es.float())
-        results.append((pred, instance_idx))
+        # pred = torch.round(Es.float())
+        results.append((Es, instance_idx))
 
         instance_idx += 1
 
@@ -352,11 +352,11 @@ def online_learning():
         state_dict = model_
     model.load_state_dict(state_dict, strict=True)
 
-    if 'optimizer' in model_.keys():
-        try:
-            optimizer.load_state_dict(model_['optimizer'])
-        except Exception as e:
-            print(e)
+    # if 'optimizer' in model_.keys():
+    #     try:
+    #         optimizer.load_state_dict(model_['optimizer'])
+    #     except Exception as e:
+    #         print(e)
 
     if torch.cuda.is_available():
         model.cuda()
@@ -381,8 +381,10 @@ def online_learning():
             video_name = seq_name.split('_')[0]
         else:
             video_name = seq_name
-        seg_results = mask_inference(video_name, OL_TARGET_SHAPE, 10, 0.7)
+        seg_results = mask_inference(video_name, OL_TARGET_SHAPE, OL_SOLO_INTERVAL, OL_SCORE_THR)
         ol_clip_frames = OL_CLIPS
+
+        # online learning by aug
         for _ in range(OL_ITER_PER_VIDEO):
             count = 1
             while True:
@@ -395,10 +397,10 @@ def online_learning():
                 continue
 
             select_idx = random.choice(list(range(len(frame[0]))))
-            start_mask = frame[0][select_idx][np.newaxis, np.newaxis, :, :].transpose(0,2,3,1)
+            start_mask = frame[0][select_idx][np.newaxis, np.newaxis, :, :].transpose(0, 2, 3, 1)
             score = frame[2][select_idx]
             frame_idx = frame[3]
-            start_frame = F[:, :, frame_idx].cpu().numpy().transpose(0,2,3,1)
+            start_frame = F[:, :, frame_idx].cpu().numpy().transpose(0, 2, 3, 1)
 
             frames = []
             masks = []
@@ -410,66 +412,82 @@ def online_learning():
                 frames.append(img_aug / 255)
                 masks.append(mask_aug)
             prevs = masks[1:]
-            Fs = torch.from_numpy(np.concatenate([f[np.newaxis, ...] for f in frames], axis=0).transpose(1, 4, 0, 2, 3)).float()
-            Ms = torch.from_numpy(np.concatenate([m[np.newaxis, ...] for m in masks], axis=0).transpose(1, 4, 0, 2, 3)).long()
-            Ps = torch.from_numpy(np.concatenate([p[np.newaxis, ...] for p in prevs], axis=0).transpose(1, 4, 0, 2, 3)).float()
+            Fs = torch.from_numpy(
+                np.concatenate([f[np.newaxis, ...] for f in frames], axis=0).transpose(1, 4, 0, 2, 3)).float()
+            Ms = torch.from_numpy(
+                np.concatenate([m[np.newaxis, ...] for m in masks], axis=0).transpose(1, 4, 0, 2, 3)).long()
+            Ps = torch.from_numpy(
+                np.concatenate([p[np.newaxis, ...] for p in prevs], axis=0).transpose(1, 4, 0, 2, 3)).float()
 
             optimizer.zero_grad()
             loss_video, video_mIou = Run_video_sp(model, {'Fs': Fs, 'Ms': Ms, 'Ps': Ps, 'info': info},
-                                                      Mem_every=1,
-                                                      mode='train')
-            print('finetune loss: {:.3f}, miou: {:.2f}'.format(loss_video, video_mIou))
+                                                  Mem_every=1,
+                                                  mode='train')
+            print('aug finetune loss: {:.3f}, miou: {:.2f}'.format(loss_video, video_mIou))
             # backward
             loss_video.backward()
             optimizer.step()
 
+        # online learning by sequence
+        for _ in range(OL_ITER_PER_VIDEO):
+            count = 1
+            while True:
+                idx, frame = random.choice(list(enumerate(seg_results)))
+                if len(frame[1]) > 0 or count >= 10:
+                    break
+                else:
+                    count += 1
+            if len(frame[1]) == 0:
+                continue
 
-        # seg_result_idx = [i[3] for i in seg_results]
-        # start_frame_idx = np.argmax([max(i[2]) if i[2] != [] else 0 for i in seg_results])
-        # start_frame = seg_result_idx[start_frame_idx]
-        # start_mask = seg_results[start_frame_idx][0][0].astype(np.uint8)
-        #
-        # Ms = torch.empty((1, 1, ol_clip_frames) + OL_TARGET_SHAPE[::-1]).cuda().long()
-        # Ps = torch.empty((1, 1, ol_clip_frames - 1) + OL_TARGET_SHAPE[::-1]).cuda()
-        # complete_flag = True
-        # masks = []
-        # masks.append(start_mask)
-        # if start_frame_idx + ol_clip_frames <= len(seg_results):
-        #     # train after
-        #     frames = [seg_result_idx[start_frame_idx + i] for i in range(ol_clip_frames)]
-        #     result_idxs = [start_frame_idx + i for i in range(ol_clip_frames)]
-        #     for i in range(1, ol_clip_frames):
-        #         seg_result = seg_results[result_idxs[i]]
-        #         if seg_result[0] == []:
-        #             complete_flag = False
-        #             break
-        #         else:
-        #             ious = []
-        #             for mask in seg_result[0]:
-        #                 iou = get_video_mIoU(start_mask, mask)
-        #                 ious.append(iou)
-        #             if np.max(ious) >= 0.5:
-        #                 mi = np.argmax(ious)
-        #                 masks.append(seg_result[0][mi])
-        #             else:
-        #                 complete_flag = False
-        #                 break
-        #     if complete_flag and len(masks) == ol_clip_frames:
-        #         for i, mask in enumerate(masks):
-        #             Ms[:, :, i] = torch.from_numpy(mask).cuda()
-        #             if i != 0:
-        #                 Ps[:, :, i - 1] = torch.from_numpy(mask).cuda()
-        #         Fs = Fs[:, :, frames].cuda()
-        #         optimizer.zero_grad()
-        #         loss_video, video_mIou = Run_video_motion(model, {'Fs': Fs, 'Ms': Ms, 'Ps': Ps, 'info': info},
-        #                                                   Mem_every=1,
-        #                                                   mode='train')
-        #         print('finetune loss: {:.3f}, miou: {:.2f}'.format(loss_video, video_mIou))
-        #         # backward
-        #         loss_video.backward()
-        #         optimizer.step()
-        #     else:
-        #         continue
+            seg_result_idx = [i[3] for i in seg_results]
+            # start_frame_idx = np.argmax([max(i[2]) if i[2] != [] else 0 for i in seg_results])
+            start_frame_idx = idx
+            start_frame = frame[3]
+            num_mask = len(frame[0])
+            start_mask = frame[0][random.choice(range(num_mask))].astype(np.uint8)
+
+            Ms = torch.empty((1, 1, ol_clip_frames) + OL_TARGET_SHAPE[::-1]).cuda().long()
+            Ps = torch.empty((1, 1, ol_clip_frames - 1) + OL_TARGET_SHAPE[::-1]).cuda()
+            complete_flag = True
+            masks = []
+            masks.append(start_mask)
+            if start_frame_idx + ol_clip_frames <= len(seg_results):
+                # train after
+                frames = [seg_result_idx[start_frame_idx + i] for i in range(ol_clip_frames)]
+                result_idxs = [start_frame_idx + i for i in range(ol_clip_frames)]
+                for i in range(1, ol_clip_frames):
+                    seg_result = seg_results[result_idxs[i]]
+                    if seg_result[0] == []:
+                        complete_flag = False
+                        break
+                    else:
+                        ious = []
+                        for mask in seg_result[0]:
+                            iou = get_video_mIoU(masks[-1], mask)
+                            ious.append(iou)
+                        if np.max(ious) >= 0.5:
+                            mi = np.argmax(ious)
+                            masks.append(seg_result[0][mi])
+                        else:
+                            complete_flag = False
+                            break
+                if complete_flag and len(masks) == ol_clip_frames:
+                    for i, mask in enumerate(masks):
+                        Ms[:, :, i] = torch.from_numpy(mask).cuda()
+                        if i != 0:
+                            Ps[:, :, i - 1] = torch.from_numpy(mask).cuda()
+                    Fs = F[:, :, frames].cuda()
+                    optimizer.zero_grad()
+                    loss_video, video_mIou = Run_video_sp(model, {'Fs': Fs, 'Ms': Ms, 'Ps': Ps, 'info': info},
+                                                          Mem_every=1,
+                                                          mode='train')
+                    print('sequence finetune loss: {:.3f}, miou: {:.2f}'.format(loss_video, video_mIou))
+                    # backward
+                    loss_video.backward()
+                    optimizer.step()
+                else:
+                    continue
 
     return model
 
@@ -480,7 +498,7 @@ def vos_inference():
     if torch.cuda.is_available():
         print('using Cuda devices, num:', torch.cuda.device_count())
 
-    Testset = TIANCHI_FUSAI(DATA_ROOT, imset='test.txt', target_size=TARGET_SHAPE)
+    Testset = TIANCHI_FUSAI(DATA_ROOT, imset='test.txt', target_size=TARGET_SHAPE, with_flip=True)
     print('Total test videos: {}'.format(len(Testset)))
     Testloader = data.DataLoader(Testset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 
@@ -519,13 +537,30 @@ def vos_inference():
             video_name = seq_name.split('_')[0]
         else:
             video_name = seq_name
-        seg_results = mask_inference(video_name, target_shape, SOLO_INTERVAL, SCORE_THR)
 
         frame_list = VIDEO_FRAMES[video_name]
 
         print('[{}]: num_frames: {}'.format(seq_name, num_frames))
 
-        results = Run_video(model, Fs, seg_results, num_frames, Mem_every=5, model_name=MODEL_NAME)
+        if isinstance(Fs, list):
+            result = []
+            for idx, f in enumerate(Fs):
+                seg_results = mask_inference(f, video_name, target_shape, SOLO_INTERVAL, SCORE_THR)
+                results = Run_video(model, f, seg_results, num_frames, Mem_every=5, model_name=MODEL_NAME)
+                if idx == 1:
+                    for i, (es, ins) in enumerate(results):
+                        es = es.cpu().detach().numpy()
+                        es = es[:, :, :, :, ::-1]
+                        es = np.ascontiguousarray(es)
+                        es = torch.from_numpy(es).cuda()
+                        results[i] = (es, ins)
+                result.append(results)
+            results = merge_result(result)
+        else:
+            seg_results = mask_inference(Fs, video_name, target_shape, SOLO_INTERVAL, SCORE_THR)
+            results = Run_video(model, Fs, seg_results, num_frames, Mem_every=5, model_name=MODEL_NAME)
+
+        results = [(torch.round(a), b) for a, b in results]
 
         for result in results:
             pred, instance = result
@@ -538,6 +573,39 @@ def vos_inference():
                 img_E.putpalette(PALETTE)
                 img_E = img_E.resize(ori_shape[::-1])
                 img_E.save(os.path.join(test_path, '{}.png'.format(frame_list[f])))
+
+
+def merge_result(result):
+    base_result = result[0]
+    final_result = {}
+
+    for i in range(1, len(result)):
+        ious = {}
+        r = result[i]
+        for es, ins in r:
+            for bs, bi in base_result:
+                es = torch.round(es)
+                bs = torch.round(bs)
+                iou = get_video_mIoU(es, bs)
+                ious.setdefault(bi, {}).setdefault(ins, iou)
+
+        for bs, bi in base_result:
+            final_result.setdefault(bi, []).append(bs)
+            if bi in ious.keys():
+                best_match_iou = max(ious.get(bi).values())
+                if best_match_iou >= 0.7:
+                    for k, v in ious.get(bi).items():
+                        if v == best_match_iou:
+                            matched = k
+                    for es, ins in r:
+                        if ins == matched:
+                            final_result[bi].append(es)
+    fr = []
+    for k, v in final_result.items():
+        ins = k
+        es = torch.mean(torch.cat([a.unsqueeze(0) for a in v]), dim=0)
+        fr.append((es, ins))
+    return fr
 
 
 def get_video_mIoU(predn, all_Mn):  # [c,t,h,w]
@@ -564,7 +632,7 @@ def get_img_miou(img1, img2):
 
 
 @fn_timer
-def mask_inference(video_name, mask_shape, interval, score_thr):
+def mask_inference(Fs, video_name, mask_shape, interval, score_thr):
     # build the model from a config file and a checkpoint file
     print('Generating frame mask...')
     model = SOLO_MODEL
@@ -582,7 +650,9 @@ def mask_inference(video_name, mask_shape, interval, score_thr):
 
     results = []
     for f in fi:
-        img = os.path.join(DATA_ROOT, 'JPEGImages/{}/{}.jpg'.format(video_name, frames[f]))
+        # img = os.path.join(DATA_ROOT, 'JPEGImages/{}/{}.jpg'.format(video_name, frames[f]))
+        img = Fs[0, :, f, :, :].cpu().numpy().transpose(1, 2, 0) * 255
+        img = img.astype(np.uint8)
         result, cost_time = inference_detector(model, img)
         result = filter_result(result, max_num=MAX_NUM)
         if result is None:
@@ -593,13 +663,13 @@ def mask_inference(video_name, mask_shape, interval, score_thr):
 
     results = filter_score(results, score_thr=score_thr)
 
-    if MODE == 'offline':
-        # visualize solo mask
-        for result in results:
-            mask_result = result[:3]
-            frame = result[3]
-            img = os.path.join(DATA_ROOT, 'JPEGImages/{}/{}.jpg'.format(video_name, frames[frame]))
-            save_mask(img, mask_result, 0, MASK_PATH)
+    # if MODE == 'offline':
+    #     # visualize solo mask
+    #     for result in results:
+    #         mask_result = result[:3]
+    #         frame = result[3]
+    #         img = os.path.join(DATA_ROOT, 'JPEGImages/{}/{}.jpg'.format(video_name, frames[frame]))
+    #         save_mask(img, mask_result, 0, MASK_PATH)
     return results
 
 
@@ -937,7 +1007,9 @@ if __name__ == '__main__':
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
         # IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
-        IMG_ROOT = '/workspace/dataset/VOS/tianchi_val/JPEGImages/'
+        IMG_ROOT = '/workspace/dataset/VOS/test_dataset/JPEGImages/'
+        # IMG_ROOT = '/workspace/dataset/VOS/tianchi_val/JPEGImages/'
+        # MODEL_PATH = '/workspace/solo/backup_models/STM/sp_interval4.pth'
         MODEL_PATH = '/workspace/solo/backup_models/STM/sp_interval4.pth'
         # MODEL_PATH = '/workspace/solo/backup_models/motion_crop_ckpt_44e.pth' # aspp + motion
         # MODEL_PATH = '/workspace/solo/backup_models/enhanced2_interval7.pth'
@@ -954,7 +1026,7 @@ if __name__ == '__main__':
 
         MODEL_NAME = 'sp'
 
-        process_tianchi_dir(SAVE_PATH)
+        # process_tianchi_dir(SAVE_PATH)
 
     MODEL = _model(MODEL_NAME)
 
@@ -964,11 +1036,13 @@ if __name__ == '__main__':
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
-    OL = True
-    OL_LR = 2e-8
+    OL = False
+    OL_LR = 1e-6
     OL_TARGET_SHAPE = (864, 480)
     OL_CLIPS = 3
-    OL_ITER_PER_VIDEO = 20
+    OL_SOLO_INTERVAL = 2
+    OL_ITER_PER_VIDEO = 50
+    OL_SCORE_THR = 0.8
 
     TARGET_SHAPE = (1008, 560)
     # TARGET_SHAPE = (864, 480)
@@ -990,6 +1064,6 @@ if __name__ == '__main__':
         generate_videos(DATA_ROOT, MERGE_PATH, VIDEO_PATH)
         miou, num, miou2 = calculate_videos_miou(MERGE_PATH, GT_PATH)
         print('offline evaluation miou: {:.3f}, instances miou: {:.3f}, {} videos counted'.format(miou, miou2, num))
-        with open(os.path.join(MERGE_PATH, 'result.txt'), 'w') as f:
+        with open(os.path.join(VIDEO_PATH, 'result.txt'), 'w') as f:
             f.write(
                 'offline evaluation miou: {:.3f}, instances miou: {:.3f}, {} videos counted'.format(miou, miou2, num))

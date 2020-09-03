@@ -18,12 +18,13 @@ class TIANCHI_FUSAI(data.Dataset):
     Dataset for DAVIS
     '''
 
-    def __init__(self, root, imset='2017/train.txt', target_size=(864, 480), test_aug=False):
+    def __init__(self, root, imset='2017/train.txt', target_size=(864, 480), test_aug=False, with_flip=False):
         self.root = root
         # self.mask_dir = os.path.join(root, 'Annotations')
         self.image_dir = os.path.join(root, 'JPEGImages')
         self.target_size = target_size
         self.test_aug = test_aug
+        self.with_flip = with_flip
 
         _imset_dir = os.path.join(root, 'ImageSets')
         _imset_f = os.path.join(_imset_dir, imset)
@@ -64,13 +65,28 @@ class TIANCHI_FUSAI(data.Dataset):
             img_file = os.path.join(self.image_dir, video_true_name, self.frame_list[video][f])
             frame_image = np.array(
                 Image.open(img_file).convert('RGB').resize(self.target_size, Image.ANTIALIAS))
-            if self.test_aug:
-                frame_image = self.test_augmentation(frame_image)
             N_frames[f] = frame_image / 255.
 
         Fs = torch.from_numpy(np.transpose(N_frames.copy(), (3, 0, 1, 2)).copy()).float()
-        return Fs, info
 
+        if self.with_flip:
+            Fs_list = []
+            Fs_list.append(Fs)
+
+            N_frames = np.empty((self.num_frames[video],) + self.target_size[::-1] + (3,), dtype=np.float32)
+            for f in range(self.num_frames[video]):
+                img_file = os.path.join(self.image_dir, video_true_name, self.frame_list[video][f])
+                frame_image = np.array(
+                    Image.open(img_file).convert('RGB').resize(self.target_size, Image.ANTIALIAS))
+                frame_image = self.flip(frame_image)
+                N_frames[f] = frame_image / 255.
+
+            Fs = torch.from_numpy(np.transpose(N_frames.copy(), (3, 0, 1, 2)).copy()).float()
+            Fs_list.append(Fs)
+
+            return Fs_list, info
+
+        return Fs, info
 
     def aug(self, image, mask, seed):
         ia.seed(seed)
@@ -118,6 +134,13 @@ class TIANCHI_FUSAI(data.Dataset):
             eh = cv2.equalizeHist(channel)
             dst[:, :, i] = eh
         return dst
+
+    def flip(self, img):
+        seq_all = iaa.Sequential([
+            iaa.Fliplr(1),
+        ])
+        img_aug = seq_all(images=img.transpose(2, 0, 1))
+        return img_aug.transpose(1, 2, 0)
 
 
 if __name__ == '__main__':
