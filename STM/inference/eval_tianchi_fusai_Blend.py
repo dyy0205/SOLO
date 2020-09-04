@@ -178,6 +178,7 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                         #     > get_video_mIoU(pred, torch.round(Es[:, 0, t - 1])):
                         Es[:, 0, t] = mask
                         reserve.remove(same_idx)
+                        # if abs(to_memorize[-1] - t) >= TO_MEMORY_MIN_INTERVAL:
                         to_memorize.append(t)
 
                     # for i, iou in enumerate(ious):
@@ -251,6 +252,7 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                         #         > get_video_mIoU(pred, torch.round(Es[:, 0, t + 1])):
                         Es[:, 0, t] = mask
                         reserve.remove(same_idx)
+                        # if abs(to_memorize[-1] - t) >= TO_MEMORY_MIN_INTERVAL:
                         to_memorize.append(t)
 
                     # for i, iou in enumerate(ious):
@@ -1055,7 +1057,7 @@ if __name__ == '__main__':
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
-    OL = True
+    OL = False
     OL_LR = 1e-7
     OL_TARGET_SHAPE = (864, 480)
     OL_CLIPS = 3
@@ -1063,7 +1065,7 @@ if __name__ == '__main__':
     OL_ITER_PER_VIDEO = 50
     OL_SCORE_THR = 0.7
 
-    WITH_FLIP = False
+    WITH_FLIP = True
     # WITH_FLIP = True
     # TEST_SCALE = (1120, 608)
     TEST_SCALE = None
@@ -1074,6 +1076,7 @@ if __name__ == '__main__':
     MAX_NUM = 8
     IOU1 = 0.5
     # IOU2 = 0.1
+    # TO_MEMORY_MIN_INTERVAL = 5
     BLEND_IOU_THR = 1
 
     SOLO_MODEL = init_detector(CONFIG_FILE, CKPT_FILE, device='cuda:0')
