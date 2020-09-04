@@ -498,7 +498,8 @@ def vos_inference():
     if torch.cuda.is_available():
         print('using Cuda devices, num:', torch.cuda.device_count())
 
-    Testset = TIANCHI_FUSAI(DATA_ROOT, imset='test.txt', target_size=TARGET_SHAPE, with_flip=True)
+    Testset = TIANCHI_FUSAI(DATA_ROOT, imset='test.txt', target_size=TARGET_SHAPE, with_flip=WITH_FLIP,
+                            test_scale=TEST_SCALE)
     print('Total test videos: {}'.format(len(Testset)))
     Testloader = data.DataLoader(Testset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 
@@ -528,6 +529,10 @@ def vos_inference():
 
     for V in progressbar:
         Fs, info = V
+        if isinstance(Fs, list):
+            b, c, t, h, w = Fs[0].shape
+        else:
+            b, c, t, h, w = Fs.shape
         seq_name = info['name'][0]
         ori_shape = info['ori_shape']
         target_shape = info['target_shape']
@@ -545,7 +550,12 @@ def vos_inference():
         if isinstance(Fs, list):
             result = []
             for idx, f in enumerate(Fs):
-                seg_results = mask_inference(f, video_name, target_shape, SOLO_INTERVAL, SCORE_THR)
+                if idx == 1:
+                    seg_results = mask_inference(video_name, target_shape, SOLO_INTERVAL, SCORE_THR, hflip=True)
+                elif idx == 2:
+                    seg_results = mask_inference(video_name, TEST_SCALE, SOLO_INTERVAL, SCORE_THR, hflip=False)
+                else:
+                    seg_results = mask_inference(video_name, target_shape, SOLO_INTERVAL, SCORE_THR, hflip=False)
                 results = Run_video(model, f, seg_results, num_frames, Mem_every=5, model_name=MODEL_NAME)
                 if idx == 1:
                     for i, (es, ins) in enumerate(results):
@@ -554,10 +564,17 @@ def vos_inference():
                         es = np.ascontiguousarray(es)
                         es = torch.from_numpy(es).cuda()
                         results[i] = (es, ins)
+                if idx == 2:
+                    for i, (es, ins) in enumerate(results):
+                        e = torch.empty(b, 1, t, h, w)
+                        for f in range(t):
+                            e[:, :, f, :, :] = F.interpolate(es[:, :, f, :, :], (h, w))
+                        e = e.cuda()
+                        results[i] = (e, ins)
                 result.append(results)
             results = merge_result(result)
         else:
-            seg_results = mask_inference(Fs, video_name, target_shape, SOLO_INTERVAL, SCORE_THR)
+            seg_results = mask_inference(video_name, target_shape, SOLO_INTERVAL, SCORE_THR)
             results = Run_video(model, Fs, seg_results, num_frames, Mem_every=5, model_name=MODEL_NAME)
 
         results = [(torch.round(a), b) for a, b in results]
@@ -593,7 +610,7 @@ def merge_result(result):
             final_result.setdefault(bi, []).append(bs)
             if bi in ious.keys():
                 best_match_iou = max(ious.get(bi).values())
-                if best_match_iou >= 0.7:
+                if best_match_iou >= 0.9:
                     for k, v in ious.get(bi).items():
                         if v == best_match_iou:
                             matched = k
@@ -632,7 +649,7 @@ def get_img_miou(img1, img2):
 
 
 @fn_timer
-def mask_inference(Fs, video_name, mask_shape, interval, score_thr):
+def mask_inference(video_name, mask_shape, interval, score_thr, hflip=False):
     # build the model from a config file and a checkpoint file
     print('Generating frame mask...')
     model = SOLO_MODEL
@@ -650,9 +667,12 @@ def mask_inference(Fs, video_name, mask_shape, interval, score_thr):
 
     results = []
     for f in fi:
-        # img = os.path.join(DATA_ROOT, 'JPEGImages/{}/{}.jpg'.format(video_name, frames[f]))
-        img = Fs[0, :, f, :, :].cpu().numpy().transpose(1, 2, 0) * 255
-        img = img.astype(np.uint8)
+        img = os.path.join(DATA_ROOT, 'JPEGImages/{}/{}.jpg'.format(video_name, frames[f]))
+        # img = Fs[0, :, f, :, :].cpu().numpy().transpose(1, 2, 0) * 255
+        # img = img.astype(np.uint8)
+        img = cv2.imread(img)
+        if hflip:
+            img = cv2.flip(img, 1)
         result, cost_time = inference_detector(model, img)
         result = filter_result(result, max_num=MAX_NUM)
         if result is None:
@@ -1006,10 +1026,9 @@ if __name__ == '__main__':
         MODEL_NAME = 'sp'
     else:
         DATA_ROOT = '/workspace/solo/code/user_data/data'
-        # IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
-        IMG_ROOT = '/workspace/dataset/VOS/test_dataset/JPEGImages/'
+        IMG_ROOT = '/workspace/dataset/VOS/mini_fusai/JPEGImages/'
+        # IMG_ROOT = '/workspace/dataset/VOS/test_dataset2/JPEGImages/'
         # IMG_ROOT = '/workspace/dataset/VOS/tianchi_val/JPEGImages/'
-        # MODEL_PATH = '/workspace/solo/backup_models/STM/sp_interval4.pth'
         MODEL_PATH = '/workspace/solo/backup_models/STM/sp_interval4.pth'
         # MODEL_PATH = '/workspace/solo/backup_models/motion_crop_ckpt_44e.pth' # aspp + motion
         # MODEL_PATH = '/workspace/solo/backup_models/enhanced2_interval7.pth'
@@ -1019,14 +1038,14 @@ if __name__ == '__main__':
         MERGE_PATH = '/workspace/solo/code/user_data/merge_data'
         MASK_PATH = os.path.join(DATA_ROOT, 'Annotations')
         CONFIG_FILE = r'/workspace/solo/code/cfg/aug_solov2_r101.py'
-        CKPT_FILE = r'/workspace/solo/code/user_data/model_data/solov2_9cls.pth'
+        CKPT_FILE = r'/workspace/solo/backup_models/solo/solov2_9cls.pth'
         TEMPLATE_MASK = r'/workspace/solo/code/user_data/template_data/00001.png'
         VIDEO_PATH = '/workspace/solo/code/user_data/video_data'
         GT_PATH = r'/workspace/dataset/VOS/tianchiyusai/Annotations/'
 
         MODEL_NAME = 'sp'
 
-        # process_tianchi_dir(SAVE_PATH)
+        process_tianchi_dir(SAVE_PATH)
 
     MODEL = _model(MODEL_NAME)
 
@@ -1036,14 +1055,18 @@ if __name__ == '__main__':
     PALETTE = Image.open(TEMPLATE_MASK).getpalette()
     VIDEO_FRAMES = analyse_images(DATA_ROOT)
 
-    OL = False
-    OL_LR = 1e-6
+    OL = True
+    OL_LR = 1e-7
     OL_TARGET_SHAPE = (864, 480)
     OL_CLIPS = 3
     OL_SOLO_INTERVAL = 2
     OL_ITER_PER_VIDEO = 50
-    OL_SCORE_THR = 0.8
+    OL_SCORE_THR = 0.7
 
+    WITH_FLIP = False
+    # WITH_FLIP = True
+    # TEST_SCALE = (1120, 608)
+    TEST_SCALE = None
     TARGET_SHAPE = (1008, 560)
     # TARGET_SHAPE = (864, 480)
     SCORE_THR = 0.3

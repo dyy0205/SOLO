@@ -18,13 +18,15 @@ class TIANCHI_FUSAI(data.Dataset):
     Dataset for DAVIS
     '''
 
-    def __init__(self, root, imset='2017/train.txt', target_size=(864, 480), test_aug=False, with_flip=False):
+    def __init__(self, root, imset='2017/train.txt', target_size=(864, 480), test_aug=False, with_flip=False,
+                 test_scale=None):
         self.root = root
         # self.mask_dir = os.path.join(root, 'Annotations')
         self.image_dir = os.path.join(root, 'JPEGImages')
         self.target_size = target_size
         self.test_aug = test_aug
         self.with_flip = with_flip
+        self.test_scale = test_scale
 
         _imset_dir = os.path.join(root, 'ImageSets')
         _imset_f = os.path.join(_imset_dir, imset)
@@ -69,24 +71,38 @@ class TIANCHI_FUSAI(data.Dataset):
 
         Fs = torch.from_numpy(np.transpose(N_frames.copy(), (3, 0, 1, 2)).copy()).float()
 
-        if self.with_flip:
+        if not self.with_flip and self.test_scale is None:
+            return Fs, info
+        else:
             Fs_list = []
             Fs_list.append(Fs)
 
-            N_frames = np.empty((self.num_frames[video],) + self.target_size[::-1] + (3,), dtype=np.float32)
-            for f in range(self.num_frames[video]):
-                img_file = os.path.join(self.image_dir, video_true_name, self.frame_list[video][f])
-                frame_image = np.array(
-                    Image.open(img_file).convert('RGB').resize(self.target_size, Image.ANTIALIAS))
-                frame_image = self.flip(frame_image)
-                N_frames[f] = frame_image / 255.
+            if self.with_flip:
+                N_frames = np.empty((self.num_frames[video],) + self.target_size[::-1] + (3,), dtype=np.float32)
+                for f in range(self.num_frames[video]):
+                    img_file = os.path.join(self.image_dir, video_true_name, self.frame_list[video][f])
+                    frame_image = np.array(
+                        Image.open(img_file).convert('RGB').resize(self.target_size, Image.ANTIALIAS))
+                    frame_image = self.flip(frame_image)
+                    N_frames[f] = frame_image / 255.
 
-            Fs = torch.from_numpy(np.transpose(N_frames.copy(), (3, 0, 1, 2)).copy()).float()
-            Fs_list.append(Fs)
+                Fs = torch.from_numpy(np.transpose(N_frames.copy(), (3, 0, 1, 2)).copy()).float()
+                Fs_list.append(Fs)
+
+            if self.test_scale is not None:
+                scale_size = self.test_scale
+                N_frames = np.empty((self.num_frames[video],) + scale_size[::-1] + (3,), dtype=np.float32)
+                for f in range(self.num_frames[video]):
+                    img_file = os.path.join(self.image_dir, video_true_name, self.frame_list[video][f])
+                    frame_image = np.array(
+                        Image.open(img_file).convert('RGB').resize(self.target_size, Image.ANTIALIAS))
+                    frame_image = cv2.resize(frame_image, scale_size)
+                    N_frames[f] = frame_image / 255.
+
+                Fs = torch.from_numpy(np.transpose(N_frames.copy(), (3, 0, 1, 2)).copy()).float()
+                Fs_list.append(Fs)
 
             return Fs_list, info
-
-        return Fs, info
 
     def aug(self, image, mask, seed):
         ia.seed(seed)
