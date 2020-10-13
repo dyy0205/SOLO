@@ -22,7 +22,10 @@ class CocoDataset(CustomDataset):
     #            'mouse', 'remote', 'keyboard', 'cell_phone', 'microwave',
     #            'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
     #            'vase', 'scissors', 'teddy_bear', 'hair_drier', 'toothbrush')
-    CLASSES = ('person', 'cat', 'dog', 'cartoon', 'horse', 'sheep', 'cow', 'car', 'airplane')
+    # CLASSES = ('person', 'cat', 'dog', 'cartoon', 'horse', 'sheep', 'cow', 'car', 'airplane')
+    CLASSES = ('floor', 'wall', 'door', 'window', 'curtain', 'painting', 'wall_o',
+               'ceiling', 'fan', 'bed', 'desk', 'cabinet', 'chair', 'sofa',
+               'lamp', 'furniture', 'electronics', 'person', 'cat', 'dog', 'plant', 'others')
 
     def load_annotations(self, ann_file):
         self.coco = COCO(ann_file)
@@ -99,7 +102,7 @@ class CocoDataset(CustomDataset):
         else:
             gt_bboxes_ignore = np.zeros((0, 4), dtype=np.float32)
 
-        seg_map = img_info['filename'].replace('jpg', 'png')
+        seg_map = img_info['filename'].replace('.jpg', '.png')
 
         ann = dict(
             bboxes=gt_bboxes,

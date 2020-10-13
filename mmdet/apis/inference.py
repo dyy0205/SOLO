@@ -15,6 +15,8 @@ from mmdet.models import build_detector
 import cv2
 from scipy import ndimage
 import time
+import os
+
 
 def init_detector(config, checkpoint=None, device='cuda:0'):
     """Initialize a detector from config file.
@@ -232,7 +234,7 @@ def show_result_ins(img,
         np.ndarray or None: If neither `show` nor `out_file` is specified, the
             visualized image is returned, otherwise None is returned.
     """
-    
+    name = img.split('/')[-1][:-4]
     assert isinstance(class_names, (tuple, list))
     img = mmcv.imread(img)
     img_show = img.copy()
@@ -269,17 +271,18 @@ def show_result_ins(img,
         for _ in range(num_mask)
     ]
     for idx in range(num_mask):
-        idx = -(idx+1)
+        idx = -(idx + 1)
         cur_mask = seg_label[idx, :, :]
         cur_mask = mmcv.imresize(cur_mask, (w, h))
         cur_mask = (cur_mask > 0.5).astype(np.uint8)
         # import cv2
-        # cv2.imwrite('/home/dingyangyang/SOLO/final_{}.jpg'.format(str(idx)), cur_mask*255)
+        # cv2.imwrite('/home/dingyangyang/SOLO/{}_{}_{}.png'.format(name, cate_label[idx], cate_score[idx]), cur_mask*255)
         if cur_mask.sum() == 0:
             continue
+
         color_mask = color_masks[idx]
         cur_mask_bool = cur_mask.astype(np.bool)
-        img_show[cur_mask_bool] = img[cur_mask_bool] * 0.5 + color_mask * 0.5
+        img_show[cur_mask_bool] = img[cur_mask_bool] * 0.4 + color_mask * 0.6
 
         cur_cate = cate_label[idx]
         cur_score = cate_score[idx]
@@ -288,8 +291,55 @@ def show_result_ins(img,
         center_y, center_x = ndimage.measurements.center_of_mass(cur_mask)
         vis_pos = (max(int(center_x) - 10, 0), int(center_y))
         cv2.putText(img_show, label_text, vis_pos,
-                        cv2.FONT_HERSHEY_COMPLEX, 0.3, (255, 255, 255))  # green
+                    cv2.FONT_HERSHEY_COMPLEX, 0.3, (255, 255, 255))  # green
+
+        # # write bbox
+        # binary_mask = maskUtils.encode(np.asfortranarray(cur_mask * 255))
+        # bbox = maskUtils.toBbox(binary_mask)
+        # x, y, width, height = map(int, bbox.tolist())
+        # cv2.rectangle(img_show, (x, y), (x + width, y + height), 255, 1)
+
     if out_file is None:
         return img
     else:
         mmcv.imwrite(img_show, out_file)
+
+    if len(cur_result) == 4:
+        sem_show = img.copy()
+        color_masks = [[0, 0, 0], [128, 0, 0], [128, 128, 0], [0, 0, 210], [125, 125, 125],
+                       [64, 0, 0], [64, 128, 0], [64, 0, 128], [192, 0, 128], [114, 128, 128],
+                       [192, 128, 128], [128, 64, 0], [0, 128, 0], [0, 0, 128], [255, 128, 100],
+                       [192, 0, 0], [192, 128, 0], [0, 64, 0], [0, 192, 0], [0, 128, 255],
+                       [100, 192, 0], [0, 255, 0]]
+        suffix = os.path.splitext(out_file)[-1]
+
+        sem_label = cur_result[3].cpu().numpy().astype(np.uint8)
+        for i in range(sem_label.shape[0]):
+            color_mask = np.array(color_masks[i], dtype=np.uint8)[::-1]
+            sem_mask = sem_label[i]
+            sem_mask = mmcv.imresize(sem_mask, (w, h))
+            if sem_mask.sum() == 0:
+                continue
+            label_text = 'other' if i == 0 else class_names[i - 1]
+            mmcv.imwrite(sem_mask * 255, out_file.replace(suffix, f'_{i}_{label_text}' + suffix))
+            sem_mask_bool = sem_mask.astype(np.bool)
+            sem_show[sem_mask_bool] = img[sem_mask_bool] * 0.4 + color_mask * 0.6
+
+        mmcv.imwrite(sem_show, out_file.replace(suffix, '_sem' + suffix))
+
+
+def save_sem_mask(img, result, out_file=None):
+    img = mmcv.imread(img)
+    h, w, _ = img.shape
+
+    cur_result = result[0]
+    sem_label = cur_result[3].cpu().numpy().astype(np.uint8)
+    blend_mask = np.ones((h, w), dtype=np.uint8) * 255
+    for i in range(sem_label.shape[0]):
+        sem_mask = sem_label[i]
+        sem_mask = mmcv.imresize(sem_mask, (w, h))
+        if sem_mask.sum() == 0:
+            continue
+        blend_mask[sem_mask > 0] = i
+
+    mmcv.imwrite(blend_mask, out_file)

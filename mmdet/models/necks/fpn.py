@@ -22,7 +22,8 @@ class FPN(nn.Module):
                  no_norm_on_lateral=False,
                  conv_cfg=None,
                  norm_cfg=None,
-                 activation=None):
+                 activation=None,
+                 freeze_params=False):
         super(FPN, self).__init__()
         assert isinstance(in_channels, list)
         self.in_channels = in_channels
@@ -91,6 +92,12 @@ class FPN(nn.Module):
                     activation=self.activation,
                     inplace=False)
                 self.fpn_convs.append(extra_fpn_conv)
+
+        self.freeze_params = freeze_params
+        if self.freeze_params:
+            for m in [self.lateral_convs, self.fpn_convs]:
+                for param in m.parameters():
+                    param.requires_grad = False
 
     # default init_weights for conv(msra) and norm in ConvModule
     def init_weights(self):

@@ -55,10 +55,14 @@ class SingleStageInsDetector(BaseDetector):
                       gt_bboxes,
                       gt_labels,
                       gt_bboxes_ignore=None,
-                      gt_masks=None):
+                      gt_masks=None,
+                      gt_semantic_seg=None):
         x = self.extract_feat(img)
         outs = self.bbox_head(x)
-        loss_inputs = outs + (gt_bboxes, gt_labels, gt_masks, img_metas, self.train_cfg)
+        if gt_semantic_seg is None:
+            loss_inputs = outs + (gt_bboxes, gt_labels, gt_masks, img_metas, self.train_cfg)
+        else:
+            loss_inputs = outs + (gt_bboxes, gt_labels, gt_masks, gt_semantic_seg, img_metas, self.train_cfg)
         losses = self.bbox_head.loss(
             *loss_inputs, gt_bboxes_ignore=gt_bboxes_ignore)
         return losses

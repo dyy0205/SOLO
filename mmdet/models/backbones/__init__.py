@@ -6,6 +6,7 @@ from .efficientnet import EfficientNet
 from .efficientnet_lite import EfficientNet_Lite
 from .vovnet import VoVNet
 from .regnet import RegNet
+from .resnest import ResNeSt
 
 __all__ = ['ResNet', 'make_res_layer', 'ResNeXt', 'SSDVGG', 'HRNet',
-           'EfficientNet', 'EfficientNet_Lite', 'VoVNet', 'RegNet']
+           'EfficientNet', 'EfficientNet_Lite', 'VoVNet', 'RegNet', 'ResNeSt']

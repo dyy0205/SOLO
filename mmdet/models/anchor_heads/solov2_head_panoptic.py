@@ -6,7 +6,7 @@ from mmcv.cnn import normal_init
 from mmdet.core import multi_apply, matrix_nms
 from ..builder import build_loss
 from ..registry import HEADS
-from mmdet.utils import bias_init_with_prob, ConvModule
+from ..utils import bias_init_with_prob, ConvModule
 
 from scipy import ndimage
 
@@ -30,20 +30,29 @@ def dice_loss(input, target):
     return 1 - d
 
 
-def generalized_dice_loss(input, target):
-    input = input.contiguous().view(input.size()[0], -1)
-    target = target.contiguous().view(target.size()[0], -1).float()
+class PyramidPooling(nn.Module):
+    def __init__(self, in_dim, reduction_dim, bins=(1, 2, 3, 6)):
+        super(PyramidPooling, self).__init__()
+        modules = []
+        for bin in bins:
+            modules.append(nn.Sequential(
+                nn.AdaptiveAvgPool2d(bin),
+                nn.Conv2d(in_dim, reduction_dim, kernel_size=1, bias=False),
+                nn.BatchNorm2d(reduction_dim),
+                nn.ReLU(inplace=True)
+            ))
+        self.features = nn.ModuleList(modules)
 
-    a = torch.sum(input * target, 1)
-    b = torch.sum(input * input, 1) + 0.001
-    c = torch.sum(target * target, 1) + 0.001
-    w = 1 / c ** 2
-    d = (2 * w * a) / (b + w * c)
-    return 1 - d
+    def forward(self, x):
+        x_size = x.size()
+        out = [x]
+        for f in self.features:
+            out.append(F.interpolate(f(x), x_size[-2:], mode='bilinear', align_corners=False))
+        return torch.cat(out, 1)
 
 
 @HEADS.register_module
-class SOLOV2Head(nn.Module):
+class SOLOV2HeadPanoptic(nn.Module):
 
     def __init__(self,
                  num_classes,
@@ -59,13 +68,14 @@ class SOLOV2Head(nn.Module):
                  loss_ins=None,
                  loss_cate=None,
                  loss_ssim=None,
+                 loss_semantic=None,
                  conv_cfg=None,
                  norm_cfg=None,
                  use_dcn_in_tower=False,
                  type_dcn=None,
-                 freeze_params=False
-                 ):
-        super(SOLOV2Head, self).__init__()
+                 use_ppm=False,
+                 freeze_params=False):
+        super(SOLOV2HeadPanoptic, self).__init__()
         self.num_classes = num_classes
         self.seg_num_grids = num_grids
         self.cate_out_channels = self.num_classes - 1
@@ -80,10 +90,13 @@ class SOLOV2Head(nn.Module):
         self.loss_cate = build_loss(loss_cate)
         self.ins_loss_weight = loss_ins['loss_weight']
         self.loss_ssim = build_loss(loss_ssim) if loss_ssim is not None else None
+        self.loss_semantic = nn.CrossEntropyLoss(ignore_index=loss_semantic['ignore_index'])
+        self.loss_semantic_weight = loss_semantic['loss_weight']
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
         self.use_dcn_in_tower = use_dcn_in_tower
         self.type_dcn = type_dcn
+        self.use_ppm = use_ppm
         self._init_layers()
 
         self.freeze_params = freeze_params
@@ -183,6 +196,14 @@ class SOLOV2Head(nn.Module):
         self.solo_mask = ConvModule(
             self.seg_feat_channels, self.seg_feat_channels, 1, padding=0, norm_cfg=norm_cfg, bias=norm_cfg is None)
 
+        if self.use_ppm:
+            self.ppm = PyramidPooling(self.seg_feat_channels, self.seg_feat_channels // 4)
+            self.semantic_logits = nn.Conv2d(
+                self.seg_feat_channels * 2, self.num_classes, 1, padding=0)
+        else:
+            self.semantic_logits = nn.Conv2d(
+                self.seg_feat_channels, self.num_classes, 1, padding=0)
+
     def init_weights(self):
         # TODO: init for feat_conv
         for m in self.feature_convs:
@@ -216,6 +237,15 @@ class SOLOV2Head(nn.Module):
             feature_add_all_level = feature_add_all_level + self.feature_convs[i](feats[i])
         feature_add_all_level = feature_add_all_level + self.feature_convs[3](torch.cat([feats[3], coord_feat], 1))
 
+        # semantic branch
+        semantic_features = feature_add_all_level.clone()
+        if self.use_ppm:
+            semantic_features = self.ppm(semantic_features)
+        semantic_pred = self.semantic_logits(semantic_features)
+        semantic_pred = F.interpolate(semantic_pred, scale_factor=4, mode='bilinear', align_corners=False)
+        if eval:
+            semantic_pred = F.softmax(semantic_pred, dim=1)  # [N, num_classes, h, w]
+
         feature_pred = self.solo_mask(feature_add_all_level)
         N, c, h, w = feature_pred.shape
         # [N, c, h, w] ——> [1, Nxc, h, w]
@@ -234,7 +264,7 @@ class SOLOV2Head(nn.Module):
             else:
                 ins_i = ins_i.sigmoid()
             ins_pred.append(ins_i)
-        return ins_pred, cate_pred
+        return ins_pred, cate_pred, semantic_pred
 
     def split_feats(self, feats):
         return (F.interpolate(feats[0], scale_factor=0.5, mode='bilinear', align_corners=False),
@@ -279,14 +309,16 @@ class SOLOV2Head(nn.Module):
     def loss(self,
              ins_preds,
              cate_preds,
+             semantic_preds,
              gt_bbox_list,
              gt_label_list,
              gt_mask_list,
+             gt_semantic_seg,
              img_metas,
              cfg,
              gt_bboxes_ignore=None):
-        featmap_sizes = [featmap.size()[-2:] for featmap in
-                         ins_preds]
+        featmap_sizes = [featmap.size()[-2:] for featmap in ins_preds]
+
         ins_label_list, cate_label_list, ins_ind_label_list = multi_apply(
             self.solo_target_single,
             gt_bbox_list,
@@ -342,13 +374,17 @@ class SOLOV2Head(nn.Module):
             for cate_pred in cate_preds
         ]
         flatten_cate_preds = torch.cat(cate_preds)
-
         loss_cate = self.loss_cate(flatten_cate_preds, flatten_cate_labels, avg_factor=num_ins + 1)
 
+        # semantic loss
+        gt_semantic_seg = gt_semantic_seg.squeeze(1).long()
+        loss_semantic = self.loss_semantic(semantic_preds, gt_semantic_seg)
+        loss_semantic *= self.loss_semantic_weight
+
         if self.loss_ssim is not None:
-            return dict(loss_ins=loss_ins, loss_ssim=loss_ssim, loss_cate=loss_cate)
+            return dict(loss_ins=loss_ins, loss_ssim=loss_ssim, loss_cate=loss_cate, loss_semantic=loss_semantic)
         else:
-            return dict(loss_ins=loss_ins, loss_cate=loss_cate)
+            return dict(loss_ins=loss_ins, loss_cate=loss_cate, loss_semantic=loss_semantic)
 
     def solo_target_single(self,
                            gt_bboxes_raw,
@@ -424,6 +460,7 @@ class SOLOV2Head(nn.Module):
     def get_seg(self,
                 seg_preds,
                 cate_preds,
+                semantic_preds,
                 img_metas,
                 cfg):
         assert len(seg_preds) == len(cate_preds)
@@ -444,7 +481,7 @@ class SOLOV2Head(nn.Module):
             cate_pred_list = torch.cat(cate_pred_list, dim=0)
             seg_pred_list = torch.cat(seg_pred_list, dim=0)
 
-            result = self.get_seg_single(cate_pred_list, seg_pred_list,
+            result = self.get_seg_single(cate_pred_list, seg_pred_list, semantic_preds[img_id],
                                          featmap_size, img_shape, ori_shape, cfg)
             result_list.append(result)
         return result_list
@@ -452,6 +489,7 @@ class SOLOV2Head(nn.Module):
     def get_seg_single(self,
                        cate_preds,
                        seg_preds,
+                       semantic_pred,
                        featmap_size,
                        img_shape,
                        ori_shape,
@@ -540,87 +578,11 @@ class SOLOV2Head(nn.Module):
                                   mode='bilinear',
                                   align_corners=False).squeeze(0)
         seg_masks = seg_masks > cfg.mask_thr
-        return seg_masks, cate_labels, cate_scores
 
-    def get_seg_single_aug(self,
-                           cate_preds,
-                           seg_preds,
-                           img_shape,
-                           cfg):
-        assert len(cate_preds) == len(seg_preds)
-
-        h, w, _ = img_shape
-
-        # process.
-        inds = (cate_preds > cfg.score_thr)
-        # category scores.
-        cate_scores = cate_preds[inds]
-        if len(cate_scores) == 0:
-            return None
-        # category labels.
-        inds = inds.nonzero()
-        cate_labels = inds[:, 1]
-
-        # strides.
-        size_trans = cate_labels.new_tensor(self.seg_num_grids).pow(2).cumsum(0)
-        strides = cate_scores.new_ones(size_trans[-1])
-        n_stage = len(self.seg_num_grids)
-        strides[:size_trans[0]] *= self.strides[0]
-        for ind_ in range(1, n_stage):
-            strides[size_trans[ind_ - 1]:size_trans[ind_]] *= self.strides[ind_]
-        strides = strides[inds[:, 0]]
-
-        # masks.
-        seg_preds = seg_preds[inds[:, 0]]
-        seg_masks = (seg_preds > cfg.mask_thr).float()
-        sum_masks = seg_masks.sum((1, 2)).float()
-
-        # filter.
-        keep = sum_masks > strides
-        if keep.sum() == 0:
-            return None
-
-        seg_masks = seg_masks[keep, ...]
-        seg_preds = seg_preds[keep, ...]
-        sum_masks = sum_masks[keep]
-        cate_scores = cate_scores[keep]
-        cate_labels = cate_labels[keep]
-
-        # mask scoring.
-        seg_scores = (seg_preds * seg_masks).sum((1, 2)) / sum_masks
-        cate_scores *= seg_scores
-
-        seg_masks = F.interpolate(seg_masks.unsqueeze(0),
-                                  scale_factor=4,
+        semantic_pred = semantic_pred.unsqueeze(0)[:, :, :h, :w]
+        sem_masks = F.interpolate(semantic_pred,
+                                  size=ori_shape[:2],
                                   mode='bilinear',
-                                  align_corners=False)[:, :, :h, :w].squeeze(0)
-        seg_preds = F.interpolate(seg_preds.unsqueeze(0),
-                                  scale_factor=4,
-                                  mode='bilinear',
-                                  align_corners=False)[:, :, :h, :w].squeeze(0)
-        return seg_masks, seg_preds, sum_masks, cate_scores, cate_labels
-
-    def get_seg_aug(self,
-                    seg_preds,
-                    cate_preds,
-                    img_shape,
-                    cfg):
-        assert len(seg_preds) == len(cate_preds)
-        num_levels = len(cate_preds)
-        num_imgs = len(cate_preds[0])
-
-        result_list = []
-        for img_id in range(num_imgs):
-            cate_pred_list = [
-                cate_preds[i][img_id].view(-1, self.cate_out_channels).detach() for i in range(num_levels)
-            ]
-            seg_pred_list = [
-                seg_preds[i][img_id].detach() for i in range(num_levels)
-            ]
-
-            cate_pred_list = torch.cat(cate_pred_list, dim=0)
-            seg_pred_list = torch.cat(seg_pred_list, dim=0)
-
-            result = self.get_seg_single_aug(cate_pred_list, seg_pred_list, img_shape, cfg)
-            result_list.append(result)
-        return result_list
+                                  align_corners=False).squeeze(0)
+        sem_masks = sem_masks > cfg.mask_thr
+        return seg_masks, cate_labels, cate_scores, sem_masks
