@@ -25,7 +25,7 @@ class CocoDataset(CustomDataset):
     # CLASSES = ('person', 'cat', 'dog', 'cartoon', 'horse', 'sheep', 'cow', 'car', 'airplane')
     CLASSES = ('floor', 'wall', 'door', 'window', 'curtain', 'painting', 'wall_o',
                'ceiling', 'fan', 'bed', 'desk', 'cabinet', 'chair', 'sofa',
-               'lamp', 'furniture', 'electronics', 'person', 'cat', 'dog', 'plant', 'others')
+               'lamp', 'furniture', 'electronics', 'person', 'cat', 'dog', 'plant', 'other')
 
     def load_annotations(self, ann_file):
         self.coco = COCO(ann_file)

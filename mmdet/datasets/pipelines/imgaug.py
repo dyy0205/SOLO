@@ -28,22 +28,22 @@ class ImgAug(object):
             [
                 # apply the following augmenters to most images
                 # iaa.Fliplr(0.5),  # horizontally flip 50% of all images
-                iaa.Flipud(0.1),  # vertically flip 20% of all images
+                # iaa.Flipud(0.1),  # vertically flip 20% of all images
                 # crop images by -5% to 10% of their height/width
-                sometimes(iaa.CropAndPad(
-                    percent=(-0.05, 0.05),
-                    pad_cval=(0, 255)
-                )),
-                sometimes(iaa.Affine(
-                    scale={"x": (0.9, 1.1), "y": (0.9, 1.1)},
-                    # scale images to 80-120% of their size, individually per axis
-                    translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)},
-                    # translate by -20 to +20 percent (per axis)
-                    rotate=(-5, 5),  # rotate by -45 to +45 degrees
-                    shear=(-3, 3),  # shear by -16 to +16 degrees
-                    order=[0, 1],  # use nearest neighbour or bilinear interpolation (fast)
-                    cval=(0, 255),  # if mode is constant, use a cval between 0 and 255
-                )),
+                # sometimes(iaa.CropAndPad(
+                #     percent=(-0.05, 0.05),
+                #     pad_cval=(0, 255)
+                # )),
+                # sometimes(iaa.Affine(
+                #     scale={"x": (0.9, 1.1), "y": (0.9, 1.1)},
+                #     # scale images to 80-120% of their size, individually per axis
+                #     translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)},
+                #     # translate by -20 to +20 percent (per axis)
+                #     rotate=(-5, 5),  # rotate by -45 to +45 degrees
+                #     shear=(-3, 3),  # shear by -16 to +16 degrees
+                #     order=[0, 1],  # use nearest neighbour or bilinear interpolation (fast)
+                #     cval=(0, 255),  # if mode is constant, use a cval between 0 and 255
+                # )),
                 # execute 0 to 5 of the following (less important) augmenters per image
                 # don't execute all of them, as that would often be way too strong
                 iaa.SomeOf((0, 5),
@@ -67,10 +67,10 @@ class ImgAug(object):
                                # ])),
                                iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.1 * 255), per_channel=0.5),
                                # add gaussian noise to images
-                               iaa.OneOf([
-                                   iaa.Dropout((0.01, 0.05), per_channel=0.5),  # randomly remove up to 10% of the pixels
-                                   iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05), per_channel=True),
-                               ]),
+                               # iaa.OneOf([
+                               #     iaa.Dropout((0.01, 0.05), per_channel=0.5),  # randomly remove up to 10% of the pixels
+                               #     iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05), per_channel=True),
+                               # ]),
                                iaa.Invert(0.05, per_channel=True),  # invert color channels
                                iaa.JpegCompression(compression=(50, 90)),
                                # iaa.AddToHueAndSaturation((-20, 20)),  # change hue and saturation
@@ -90,9 +90,9 @@ class ImgAug(object):
                                iaa.Grayscale(alpha=(0.0, 1.0)),
                                # sometimes(iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)),
                                # move pixels locally around (with random strengths)
-                               sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05))),
+                               # sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05))),
                                # sometimes move parts of the image around
-                               sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.075)))
+                               # sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.075)))
                            ],
                            random_order=True
                            )

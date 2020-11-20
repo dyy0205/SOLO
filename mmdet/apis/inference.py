@@ -90,7 +90,15 @@ def inference_detector(model, img):
     with torch.no_grad():
         torch.cuda.synchronize()
         st = time.time()
-        result = model(return_loss=False, rescale=True, **data)
+        try:
+            result = model(return_loss=False, rescale=True, **data)
+        except RuntimeError as exception:
+            if 'out of memory' in str(exception):
+                print('WARNING: out of memory')
+                if hasattr(torch.cuda, 'empty_cache'):
+                    torch.cuda.empty_cache()
+            else:
+                raise exception
         torch.cuda.synchronize()
         cost_time = time.time() - st
     return result, cost_time
@@ -234,7 +242,7 @@ def show_result_ins(img,
         np.ndarray or None: If neither `show` nor `out_file` is specified, the
             visualized image is returned, otherwise None is returned.
     """
-    name = img.split('/')[-1][:-4]
+
     assert isinstance(class_names, (tuple, list))
     img = mmcv.imread(img)
     img_show = img.copy()
