@@ -14,7 +14,7 @@ from plane_estimation.log import Logger
 from plane_estimation.misc import AverageMeter, get_coordinate_map
 from plane_estimation.dataset import PlaneDataset
 from plane_estimation.planar import Planar
-from plane_estimation.loss import param_loss, depth_loss, instance_aware_loss
+from plane_estimation.loss import param_loss, depth_loss, instance_aware_loss, total_loss
 
 
 def load_dataset(args, mode):
@@ -23,8 +23,8 @@ def load_dataset(args, mode):
         T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
 
-    batch_size = args.batch_size if mode == 'train' else 1
-    is_shuffle = mode == 'train'
+    batch_size = args.batch_size if mode == 'train_' else 1
+    is_shuffle = mode == 'train_'
     loaders = data.DataLoader(
         PlaneDataset(subset=mode, transform=transforms, root_dir=args.dataset_dir),
         batch_size=batch_size, shuffle=is_shuffle, num_workers=args.num_workers
@@ -46,7 +46,7 @@ def train(args, model, device):
     model.eval()
     model.get_plane.train()
 
-    dataloader = load_dataset(args, mode='train')
+    dataloader = load_dataset(args, mode='train_')
 
     optimizer = torch.optim.Adam(model.get_plane.parameters(), lr=args.init_lr, weight_decay=args.weight_decay)
     # optimizer = torch.optim.SGD(model.get_plane.parameters(), lr=args.init_lr, momentum=0.9)
@@ -70,7 +70,7 @@ def train(args, model, device):
             valid_region = sample['valid_region'].to(device)
 
             # forward pass
-            bts_depth, param, mask_lst, instance_map, valid_region, solo_results = \
+            bts_depth, param, mask_lst, instance_map, solo_valid, solo_results = \
                 model(image, raw_image, args.bts_input, args.plane_cls, args.solo_conf)
             # bts_depth = F.interpolate(bts_depth, size=(192, 256))
 
@@ -80,19 +80,27 @@ def train(args, model, device):
                 if mask_lst[i] is None:
                     continue
                 # calculate loss
-                _loss_param = param_loss(
-                    param[i:i+1], gt_plane_param[i:i+1], valid_region[i].unsqueeze(0).unsqueeze(0))
-                _loss_depth, rmse, infered_depth, gt = depth_loss(
-                    param[i:i+1], gt_plane_param[i:i+1], k_inv_dot_xy1, gt_depth[i:i+1])
 
-                Image.fromarray(raw_image[i].detach().cpu().numpy()).save(f'val_imgs/image_{i}.jpg')
-                Image.fromarray(gt.detach().cpu().numpy()*1000).convert('I').save(f'val_imgs/depth_{i}.png')
-                Image.fromarray(infered_depth[0][0].detach().cpu().numpy()*1000).convert('I').save(f'val_imgs/depth_infer_{i}.png')
+                valid = (valid_region[i:i+1] + solo_valid[i].unsqueeze(0).unsqueeze(0)) == 2
 
-                _loss_instance, instance_depth, abs_distance, instance_param = instance_aware_loss(
-                    mask_lst[i], instance_map[i], param[i], k_inv_dot_xy1,
-                    valid_region[i].unsqueeze(0).unsqueeze(0), gt_depth[i:i+1])
+                # _loss_param = param_loss(
+                #     param[i:i+1], gt_plane_param[i:i+1], valid)
+                #
+                # _loss_depth, rmse, inferred_depth = depth_loss(
+                #     param[i:i+1], k_inv_dot_xy1, gt_depth[i:i+1])
+                #
+                # _loss_instance, instance_depth, abs_distance, instance_param = instance_aware_loss(
+                #     mask_lst[i], instance_map[i], param[i], k_inv_dot_xy1, valid, gt_depth[i:i+1])
 
+                _loss_param, _loss_instance, _loss_depth, inferred_depth, instance_depth, instance_param = \
+                    total_loss(mask_lst[i], param[i], k_inv_dot_xy1, valid, gt_depth[i:i+1], gt_plane_param[i])
+
+                Image.fromarray(raw_image[i].detach().cpu().numpy()).save(
+                    f'val_imgs/image_{i}.jpg')
+                Image.fromarray(gt_depth[i][0].detach().cpu().numpy()*1000).convert('I').save(
+                    f'val_imgs/depth_{i}.png')
+                Image.fromarray(inferred_depth[0][0].detach().cpu().numpy()*1000).convert('I').save(
+                    f'val_imgs/depth_infer_{i}.png')
                 Image.fromarray(instance_depth[0][0].detach().cpu().numpy() * 1000).convert('I').save(
                     f'val_imgs/depth_ins_{i}.png')
 
