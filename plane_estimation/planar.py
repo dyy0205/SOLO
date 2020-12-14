@@ -33,7 +33,7 @@ class Planar(nn.Module):
 
     def forward(self, x, x_raw, bts_input, plane_cls, solo_conf):
         # BTS
-        x_bts = F.interpolate(x, size=bts_input)   # bts input: (640, 480)
+        x_bts = F.interpolate(x, size=bts_input)   # bts input: (480, 640)
         _, _, _, _, feat, depth = self.bts(x_bts, focal=512, device=self.device)
         # Planes
         feat = F.interpolate(feat, size=(192, 256))
@@ -80,14 +80,14 @@ class Planar(nn.Module):
                 masks, classes = None, None
 
             valid = np.zeros((192, 256), dtype=np.uint8)
-            ins_map = np.zeros((192, 256), dtype=np.uint8) * 255
+            ins_map = np.zeros((192, 256), dtype=np.uint8)
             if masks is not None:
                 resized_mask = []
                 for i, mask in enumerate(masks):
                     mask = cv2.resize(mask, (256, 192))
                     resized_mask.append(mask)
                     valid[mask > 0] = 1
-                    ins_map[mask > 0] = i
+                    ins_map[mask > 0] = i + 1
 
                 masks = torch.tensor(resized_mask).float().to(self.device)
                 ins_map = torch.from_numpy(ins_map).long().to(self.device)
@@ -101,6 +101,66 @@ class Planar(nn.Module):
             valid_region.append(valid)
 
         return depth, plane_params, mask_lst, instance_map, valid_region, results
+
+
+class NYUPlanar(nn.Module):
+    def __init__(self, from_bts_feat=False):
+        super(NYUPlanar, self).__init__()
+        self.from_bts_feat = from_bts_feat
+
+        self.conv0 = nn.Conv2d(3, 32, 3, padding=1)
+        self.daspp_3 = atrous_conv(32, 32, 3, apply_bn_first=False)
+        self.daspp_6 = atrous_conv(32 * 2, 32, 6)
+        self.daspp_12 = atrous_conv(32 * 3, 32, 12)
+        self.daspp_18 = atrous_conv(32 * 4, 32, 18)
+        self.daspp_24 = atrous_conv(32 * 5, 32, 24)
+        self.daspp_conv = nn.Sequential(nn.Conv2d(32 * 6, 32, 1, bias=False),
+                                        nn.ELU())
+        self.get_plane = nn.Conv2d(32, 3, 1, bias=False)
+
+    def forward(self, x):
+        if not self.from_bts_feat:
+            x = self.conv0(x)
+
+        daspp_3 = self.daspp_3(x)
+        concat4_2 = torch.cat([x, daspp_3], dim=1)
+        daspp_6 = self.daspp_6(concat4_2)
+        concat4_3 = torch.cat([concat4_2, daspp_6], dim=1)
+        daspp_12 = self.daspp_12(concat4_3)
+        concat4_4 = torch.cat([concat4_3, daspp_12], dim=1)
+        daspp_18 = self.daspp_18(concat4_4)
+        concat4_5 = torch.cat([concat4_4, daspp_18], dim=1)
+        daspp_24 = self.daspp_24(concat4_5)
+        concat4_daspp = torch.cat([x, daspp_3, daspp_6, daspp_12, daspp_18, daspp_24], dim=1)
+        daspp_feat = self.daspp_conv(concat4_daspp)
+        plane_params = self.get_plane(daspp_feat)
+
+        return plane_params
+
+
+class atrous_conv(nn.Sequential):
+    def __init__(self, in_channels, out_channels, dilation, apply_bn_first=True):
+        super(atrous_conv, self).__init__()
+        self.atrous_conv = nn.Sequential()
+        if apply_bn_first:
+            self.atrous_conv.add_module('first_bn', nn.BatchNorm2d(in_channels, momentum=0.01, affine=True,
+                                                                   track_running_stats=True, eps=1.1e-5))
+
+        self.atrous_conv.add_module('aconv_sequence', nn.Sequential(nn.ReLU(),
+                                                                    nn.Conv2d(in_channels=in_channels,
+                                                                              out_channels=out_channels * 2, bias=False,
+                                                                              kernel_size=1, stride=1, padding=0),
+                                                                    nn.BatchNorm2d(out_channels * 2, momentum=0.01,
+                                                                                   affine=True,
+                                                                                   track_running_stats=True),
+                                                                    nn.ReLU(),
+                                                                    nn.Conv2d(in_channels=out_channels * 2,
+                                                                              out_channels=out_channels, bias=False,
+                                                                              kernel_size=3, stride=1,
+                                                                              padding=(dilation, dilation),
+                                                                              dilation=dilation)))
+    def forward(self, x):
+        return self.atrous_conv.forward(x)
 
 
 if __name__ == "__main__":

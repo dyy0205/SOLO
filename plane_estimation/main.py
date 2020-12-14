@@ -23,8 +23,8 @@ def load_dataset(args, mode):
         T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
 
-    batch_size = args.batch_size if mode == 'train_' else 1
-    is_shuffle = mode == 'train_'
+    batch_size = args.batch_size if mode == 'train2' else 1
+    is_shuffle = mode == 'train2'
     loaders = data.DataLoader(
         PlaneDataset(subset=mode, transform=transforms, root_dir=args.dataset_dir),
         batch_size=batch_size, shuffle=is_shuffle, num_workers=args.num_workers
@@ -46,7 +46,7 @@ def train(args, model, device):
     model.eval()
     model.get_plane.train()
 
-    dataloader = load_dataset(args, mode='train_')
+    dataloader = load_dataset(args, mode='train2')
 
     optimizer = torch.optim.Adam(model.get_plane.parameters(), lr=args.init_lr, weight_decay=args.weight_decay)
     # optimizer = torch.optim.SGD(model.get_plane.parameters(), lr=args.init_lr, momentum=0.9)
@@ -95,26 +95,27 @@ def train(args, model, device):
                 _loss_param, _loss_instance, _loss_depth, inferred_depth, instance_depth, instance_param = \
                     total_loss(mask_lst[i], param[i], k_inv_dot_xy1, valid, gt_depth[i:i+1], gt_plane_param[i])
 
-                Image.fromarray(raw_image[i].detach().cpu().numpy()).save(
-                    f'val_imgs/image_{i}.jpg')
-                Image.fromarray(gt_depth[i][0].detach().cpu().numpy()*1000).convert('I').save(
-                    f'val_imgs/depth_{i}.png')
-                Image.fromarray(inferred_depth[0][0].detach().cpu().numpy()*1000).convert('I').save(
-                    f'val_imgs/depth_infer_{i}.png')
-                Image.fromarray(instance_depth[0][0].detach().cpu().numpy() * 1000).convert('I').save(
-                    f'val_imgs/depth_ins_{i}.png')
+                if i == 1:
+                    Image.fromarray(raw_image[i].detach().cpu().numpy()).save(
+                        f'val_imgs/image_{i}.jpg')
+                    Image.fromarray(gt_depth[i][0].detach().cpu().numpy()*1000).convert('I').save(
+                        f'val_imgs/depth_{i}.png')
+                    Image.fromarray(inferred_depth[0][0].detach().cpu().numpy()*1000).convert('I').save(
+                        f'val_imgs/depth_infer_{i}.png')
+                    Image.fromarray(instance_depth[0][0].detach().cpu().numpy() * 1000).convert('I').save(
+                        f'val_imgs/depth_ins_{i}.png')
 
-                _loss = _loss_param + _loss_depth + _loss_instance
+                _loss = _loss_param  #  + _loss_depth + _loss_instance
 
                 loss += _loss
-                loss_param += _loss_param
-                loss_depth += _loss_depth
-                loss_instance += _loss_instance
+                # loss_param += _loss_param
+                # loss_depth += _loss_depth
+                # loss_instance += _loss_instance
 
             loss /= batch_size
-            loss_param /= batch_size
-            loss_depth /= batch_size
-            loss_instance /= batch_size
+            # loss_param /= batch_size
+            # loss_depth /= batch_size
+            # loss_instance /= batch_size
 
             # Backward
             optimizer.zero_grad()
@@ -123,22 +124,24 @@ def train(args, model, device):
 
             # update loss
             losses.update(loss.item())
-            losses_param.update(loss_param.item())
-            losses_depth.update(loss_depth.item())
-            losses_instance.update(loss_instance.item())
+            # losses_param.update(loss_param.item())
+            # losses_depth.update(loss_depth.item())
+            # losses_instance.update(loss_instance.item())
 
             if iter % args.print_interval == 0:
                 log.logger.info(f"[{epoch:2d}][{iter:3d}/{len(dataloader):3d}] "
                                 f"Loss: {losses.val:.4f} ({losses.avg:.4f}) "
-                                f"Param: {losses_param.val:.4f} ({losses_param.avg:.4f}) "
-                                f"Depth: {losses_depth.val:.4f} ({losses_depth.avg:.4f}) "
-                                f"Instance: {losses_instance.val:.4f} ({losses_instance.avg:.4f}) ")
+                                # f"Param: {losses_param.val:.4f} ({losses_param.avg:.4f}) "
+                                # f"Depth: {losses_depth.val:.4f} ({losses_depth.avg:.4f}) "
+                                # f"Instance: {losses_instance.val:.4f} ({losses_instance.avg:.4f}) "
+                                )
 
         log.logger.info(f"* epoch: {epoch:2d} "
                         f"Loss: {losses.avg:.6f} "
-                        f"Param: {losses_param.avg:.6f} "
-                        f"Depth: {losses_depth.avg:.6f} "
-                        f"Instance: {losses_instance.avg:.6f}\t")
+                        # f"Param: {losses_param.avg:.6f} "
+                        # f"Depth: {losses_depth.avg:.6f} "
+                        # f"Instance: {losses_instance.avg:.6f}\t"
+                        )
 
         # save checkpoint
         if epoch % args.save_interval == 0 or epoch == args.num_epochs - 1:
@@ -217,7 +220,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # BTS settings
     parser.add_argument('--bts_ckpt', type=str, default='./depth_model')
-    parser.add_argument('--bts_input', type=tuple, default=(640, 480), help='bts input image shape')
+    parser.add_argument('--bts_input', type=tuple, default=(192, 256), help='bts input image shape (h, w)')
     parser.add_argument('--bts_size', type=int, default=512, help='initial num_filters in bts')
     parser.add_argument('--max_depth', type=float, default=10, help='maximum depth in estimation')
     parser.add_argument('--dataset', type=str, default='nyu', help='dataset to train on, kitti or nyu')

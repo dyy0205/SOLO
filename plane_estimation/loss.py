@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 import numpy as np
+from PIL import Image
 
 
 def param_loss(pred_param, gt_param, valid_region):
@@ -150,7 +151,7 @@ def total_loss(solo_masks, pred_param, k_inv_dot_xy1,
 
     # infer depth for every pixel
     inferred_depth = 1. / torch.sum(pred_param.view(-1, h*w) * k_inv_dot_xy1, dim=0, keepdim=True)  # (1, h*w)
-    inferred_depth = inferred_depth.view(1, h * w)
+    inferred_depth = inferred_depth.view(1, 1, h, w)
     inferred_depth = torch.clamp(inferred_depth, 1e-4, 10.0)
 
     param = pred_param.clone()
@@ -173,21 +174,168 @@ def total_loss(solo_masks, pred_param, k_inv_dot_xy1,
 
     # select valid region
     valid_region = ((valid_region + (gt_depth != 0.0)) == 2).view(-1)
-    valid_param = param[:, valid_region]                             # (3, N)
-    ray = k_inv_dot_xy1[:, valid_region]                             # (3, N)
-    valid_depth = gt_depth.view(1, -1)[:, valid_region]              # (1, N)
-    valid_instance_depth = instance_depth.view(1, -1)[:, valid_region]
+    if valid_region.shape[0] > 0:
+        valid_param = param[:, valid_region]                             # (3, N)
+        ray = k_inv_dot_xy1[:, valid_region]                             # (3, N)
+        valid_depth = gt_depth.view(1, -1)[:, valid_region]              # (1, N)
+        valid_instance_depth = instance_depth.view(1, -1)[:, valid_region]
 
-    # abs distance for valid inferred depth
-    abs_distance = torch.mean(torch.abs(valid_instance_depth - valid_depth))
+        # abs distance for valid inferred depth
+        abs_distance = torch.mean(torch.abs(valid_instance_depth - valid_depth))
 
-    # Q_loss for every instance
-    Q = valid_depth * ray                                            # (3, N)
-    q_diff = torch.abs(torch.sum(valid_param * Q, dim=0, keepdim=True) - 1.)
-    instance_loss = torch.mean(q_diff)
+        # Q_loss for every instance
+        Q = valid_depth * ray                                            # (3, N)
+        q_diff = torch.abs(torch.sum(valid_param * Q, dim=0, keepdim=True) - 1.)
+        instance_loss = torch.mean(q_diff)
 
-    # parameter loss for planes
-    valid_gt_param = gt_param.view(-1, h*w)[:, valid_region]         # (3, N)
-    param_loss = torch.mean(torch.sum(torch.abs(valid_param - valid_gt_param), dim=0))
+        # parameter loss for planes
+        valid_gt_param = gt_param.view(-1, h*w)[:, valid_region]         # (3, N)
+        # param_loss = torch.mean(torch.sum(torch.abs(valid_param - valid_gt_param), dim=0))
+        param_loss = smooth_l1_loss(valid_param, valid_gt_param)
 
-    return param_loss, instance_loss, abs_distance, inferred_depth, instance_depth, instance_param
+        return param_loss, instance_loss, abs_distance, inferred_depth, instance_depth, instance_param
+    else:
+        return 0., 0., 0., inferred_depth, instance_depth, instance_param
+
+
+def total_loss2(solo_masks, pred_param, k_inv_dot_xy1,
+               valid_region, gt_depth, gt_param, return_loss=True):
+    """
+    calculate loss of parameters
+    first we combine sample segmentation with sample params to get K plane parameters
+    then we used this parameter to infer plane based Q loss as done in PlaneRecover
+    the loss enforce parameter is consistent with ground truth depth
+
+    :param solo_masks: tensor with size (K, h, w)
+    :param pred_param: tensor with size (3, h, w)
+    :param valid_region: tensor with size (1, 1, h, w), indicate planar region
+    :param gt_depth: tensor with size (1, 1, h, w)
+    :param gt_param: tensor with size (3, h, w)
+    :param return_loss: bool
+    :return: loss
+             inferred depth with size (1, 1, h, w) corresponded to instance parameters
+    """
+
+    _, _, h, w = gt_depth.size()
+
+    # infer depth for every pixel
+    inferred_depth = 1. / torch.sum(pred_param.view(-1, h*w) * k_inv_dot_xy1, dim=0, keepdim=True)  # (1, h*w)
+    inferred_depth = inferred_depth.view(1, 1, h, w)
+    inferred_depth = torch.clamp(inferred_depth, 1e-4, 10.0)
+
+    param = pred_param.clone()
+    instance_param = []
+    for mask in solo_masks:
+        mask = (mask > 0)
+        ins_param = pred_param[:, mask].mean(dim=1)
+        param[:, mask] = ins_param.repeat(mask.sum(), 1).transpose(0, 1)
+        instance_param.append(ins_param)
+    instance_param = torch.cat(instance_param, dim=0).view(-1, 3)   # (K, 3)
+    param = param.view(-1, h*w)
+
+    # infer depth for plane instance
+    instance_depth = 1. / torch.sum(param * k_inv_dot_xy1, dim=0, keepdim=True)  # (1, h*w)
+    instance_depth = instance_depth.view(1, 1, h, w)
+    instance_depth = torch.clamp(instance_depth, 1e-4, 10.0)
+
+    if not return_loss:
+        return _, _, _, inferred_depth, instance_depth, instance_param
+
+    # select valid region
+    valid_region = ((valid_region + (gt_depth != 0.0)) == 2).view(-1)
+    if valid_region.shape[0] > 0:
+        valid_param = param[:, valid_region]                             # (3, N)
+        ray = k_inv_dot_xy1[:, valid_region]                             # (3, N)
+        valid_depth = gt_depth.view(1, -1)[:, valid_region]              # (1, N)
+        valid_instance_depth = instance_depth.view(1, -1)[:, valid_region]
+
+        # abs distance for valid inferred depth
+        abs_distance = torch.mean(torch.abs(valid_instance_depth - valid_depth))
+        # abs_distance = F.kl_div(valid_instance_depth.log(), valid_depth)
+        # abs_distance = torch.mean((valid_instance_depth - valid_depth) ** 2)
+
+        # Q_loss for every instance
+        Q = valid_depth * ray                                            # (3, N)
+        q_diff = torch.abs(torch.sum(valid_param * Q, dim=0, keepdim=True) - 1.)
+        instance_loss = torch.mean(q_diff)
+        # instance_loss = torch.mean((torch.sum(valid_param * Q, dim=0, keepdim=True) - 1.) ** 2)
+
+        # parameter loss for planes
+        valid_gt_param = gt_param.view(-1, h*w)[:, valid_region]         # (3, N)
+        # param_loss = torch.mean(torch.sum(torch.abs(valid_param - valid_gt_param), dim=0))
+        param_loss = smooth_l1_loss(valid_param, valid_gt_param)
+        # param_loss = torch.mean(torch.sum((valid_param - valid_gt_param) ** 2, dim=0))
+
+        return param_loss, instance_loss, abs_distance, inferred_depth, instance_depth, instance_param
+    else:
+        return 0., 0., 0., inferred_depth, instance_depth, instance_param
+
+
+def smooth_l1_loss(pred, target, beta=1.0):
+    assert beta > 0
+    assert pred.size() == target.size() and target.numel() > 0
+    diff = torch.abs(pred - target)
+    loss = torch.where(diff < beta, 0.5 * diff * diff / beta,
+                       diff - 0.5 * beta)
+    loss = torch.mean(torch.sum(loss, dim=0))
+    return loss
+
+
+def nyu_loss(seg_map, pred_param, k_inv_dot_xy1, valid_region, gt_param, gt_depth, return_loss=True):
+    """
+    calculate loss of parameters
+    first we combine sample segmentation with sample params to get K plane parameters
+    then we used this parameter to infer plane based Q loss as done in PlaneRecover
+    the loss enforce parameter is consistent with ground truth depth
+
+    :param seg_map: tensor with size (h, w)
+    :param pred_param: tensor with size (3, h, w)
+    :param valid_region: tensor with size (h, w), indicate planar region
+    :param gt_param: tensor with size (3, h, w)
+    :param gt_depth: tensor with size (h, w)
+    :param return_loss: bool
+    :return: loss  q
+             inferred depth with size (h, w) corresponded to instance parameters
+    """
+
+    h, w = seg_map.shape
+
+    param = pred_param.clone()
+    instance_param = []
+    for ins in torch.unique(seg_map):
+        if ins == 0:
+            continue
+        mask = seg_map == ins
+        ins_param = pred_param[:, mask].mean(dim=1)
+        param[:, mask] = ins_param.repeat(mask.sum(), 1).transpose(0, 1)
+        instance_param.append(ins_param)
+    instance_param = torch.cat(instance_param, dim=0).view(-1, 3)   # (K, 3)
+    param = param.view(-1, h*w)
+
+    # infer depth for plane instance
+    instance_depth = 1. / torch.sum(param * k_inv_dot_xy1, dim=0, keepdim=True)  # (1, h*w)
+    instance_depth = instance_depth.view(h, w)
+    # instance_depth = torch.clamp(instance_depth, 1e-4, 10.0)
+    instance_depth[valid_region == 0] = 0.
+    instance_depth[instance_depth < 0] = -instance_depth[instance_depth < 0]
+    # print(torch.unique(instance_depth))
+
+    if not return_loss:
+        return instance_depth, instance_param
+
+    # select valid region
+    valid_region = ((valid_region + (gt_depth != 0)) == 2).view(-1)
+    if valid_region.shape[0] > 0:
+        valid_param = param[:, valid_region]                             # (3, N)
+        valid_gt_param = gt_param.view(-1, h*w)[:, valid_region]         # (3, N)
+        valid_depth = gt_depth.view(-1)[valid_region]
+        valid_instance_depth = instance_depth.view(-1)[valid_region]
+        try:
+            param_loss = smooth_l1_loss(valid_param, valid_gt_param)
+            depth_loss = torch.mean(torch.abs(valid_instance_depth - valid_depth))
+        except:
+            # print(valid_param.shape, valid_gt_param.shape)
+            param_loss, depth_loss = 0., 0.
+        return param_loss, depth_loss, instance_depth, instance_param
+    else:
+        return 0., 0., instance_depth, instance_param

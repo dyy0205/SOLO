@@ -8,7 +8,7 @@ from torch.utils import data
 
 class PlaneDataset(data.Dataset):
     def __init__(self, subset='train', transform=None, root_dir=None):
-        assert subset in ['train', 'val', 'train_']
+        assert subset in ['train', 'val', 'train2']
         self.subset = subset
         self.transform = transform
         self.root_dir = os.path.join(root_dir, subset)
@@ -81,7 +81,7 @@ class PlaneDataset(data.Dataset):
         return depth_map
 
     def __getitem__(self, index):
-        if self.subset == 'train':
+        if self.subset in ['train', 'train2']:
             data_path = self.data_list[index]
         else:
             data_path = str(index) + '.npz'
@@ -136,6 +136,124 @@ class PlaneDataset(data.Dataset):
             'plane_instance_parameter': torch.FloatTensor(plane_instance_parameter)
         }
 
+        return sample
+
+    def __len__(self):
+        return len(self.data_list)
+
+
+class NYUPlaneDataset(data.Dataset):
+    def __init__(self, subset='train', transform=None, root_dir=None):
+        assert subset in ['train', 'val']
+        self.subset = subset
+        self.transform = transform
+        self.root_dir = os.path.join(root_dir, subset)
+        # self.bts_depth_dir = os.path.join(root_dir, 'bts_depth')
+        self.txt_file = os.path.join(root_dir, subset + '.txt')
+
+        self.data_list = [line.strip() for line in open(self.txt_file, 'r').readlines()]
+        self.precompute_K_inv_dot_xy_1()
+
+    def get_plane_parameters(self, plane, seg_map):
+        h, w = seg_map.shape
+        plane_parameters = np.ones((3, h, w))
+        for i in range(h):
+            for j in range(w):
+                d = seg_map[i, j]
+                if d == 0:
+                    continue
+                plane_parameters[:, i, j] = plane[d - 1, :]
+        return plane_parameters
+
+    def precompute_K_inv_dot_xy_1(self, h=480, w=640):
+        focal_length = 517.97
+        offset_x = 320
+        offset_y = 240
+
+        K = [[focal_length, 0, offset_x],
+             [0, focal_length, offset_y],
+             [0, 0, 1]]
+
+        K_inv = np.linalg.inv(np.array(K))
+        self.K_inv = K_inv
+
+        K_inv_dot_xy_1 = np.zeros((3, h, w))
+        for y in range(h):
+            for x in range(w):
+                yy = float(y) / h * 480
+                xx = float(x) / w * 640
+
+                ray = np.dot(self.K_inv,
+                             np.array([xx, yy, 1]).reshape(3, 1))
+                K_inv_dot_xy_1[:, y, x] = ray[:, 0]
+
+        # precompute to speed up processing
+        self.K_inv_dot_xy_1 = K_inv_dot_xy_1
+
+    def plane2depth(self, plane_parameters, gt_depth, valid_region):
+        element_sum = np.sum(self.K_inv_dot_xy_1.reshape(3, -1) * plane_parameters.reshape(3, -1), axis=0)
+        if element_sum.all() == 0:
+            depth_map = np.zeros((480, 640), dtype=np.float32)
+        else:
+            depth_map = 1. / element_sum
+            depth_map = depth_map.reshape(480, 640)
+
+            depth_map[valid_region == 0] = 0.
+            depth_map[depth_map < 0] = -depth_map[depth_map < 0]
+        return depth_map
+
+    def __getitem__(self, index):
+        if self.subset == 'train':
+            data_path = self.data_list[index]
+        else:
+            data_path = str(index) + '.npz'
+        data_path = os.path.join(self.root_dir, data_path)
+        data = np.load(data_path)
+
+        image = data['image']
+        raw_image = image
+        image = Image.fromarray(image)
+        if self.transform is not None:
+            image = self.transform(image)
+
+        plane = data['plane']   # (n, 3)
+        num_planes = data['num_planes']
+
+        instances = data['instances']    # (n, h, w)
+        categories = data['semantics']   # (n, )
+        seg_map = np.zeros((480, 640), dtype=np.uint8)
+        semantic_map = np.zeros((480, 640), dtype=np.uint8)
+        valid_region = np.zeros((480, 640), dtype=np.uint8)
+        for idx in range(len(instances)):
+            mask = (instances[idx] == 1)
+            seg_map[mask] = idx + 1
+            semantic_map[mask] = categories[idx]
+            valid_region[mask] = 1
+
+        # surface plane parameters
+        plane_parameters = self.get_plane_parameters(plane, seg_map)  # (3, h, w)
+
+        # since some depth is missing, we use plane to recover those depth following PlaneNet
+        gt_depth = data['depth']
+        depth = self.plane2depth(plane_parameters, gt_depth, valid_region)
+
+        # bts_path = os.path.join(self.bts_depth_dir, data_path.split('/')[-1])
+        # bts_data = np.load(bts_path)
+        # points_3d = bts_data['points']
+        last_layer_feat = data['last_feat']
+
+        sample = {
+            'image': image,
+            'raw_image': raw_image,
+            'num_planes': num_planes,
+            'gt_semantic': torch.FloatTensor(semantic_map),
+            'gt_seg': torch.LongTensor(seg_map),
+            # 'points_3d': torch.FloatTensor(points_3d),
+            'last_layer_feat': torch.FloatTensor(last_layer_feat),
+            'depth': torch.FloatTensor(depth),
+            'plane_parameters': torch.FloatTensor(plane_parameters),
+            'valid_region': torch.ByteTensor(valid_region),
+        }
         return sample
 
     def __len__(self):
