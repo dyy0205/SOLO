@@ -36,7 +36,8 @@ class SOLOV2HeadDCN(nn.Module):
     def __init__(self,
                  num_classes,
                  in_channels,
-                 seg_feat_channels=256,
+                 seg_feat_channels=512,
+                 ins_out_channels=256,
                  stacked_convs=4,
                  strides=(4, 8, 16, 32, 64),
                  base_edge_list=(16, 32, 64, 128, 256),
@@ -60,6 +61,7 @@ class SOLOV2HeadDCN(nn.Module):
         self.cate_out_channels = self.num_classes - 1
         self.in_channels = in_channels
         self.seg_feat_channels = seg_feat_channels
+        self.ins_out_channels = ins_out_channels
         self.stacked_convs = stacked_convs
         self.strides = strides
         self.sigma = sigma
@@ -100,7 +102,7 @@ class SOLOV2HeadDCN(nn.Module):
             if i == 0:
                 one_conv = ConvModule(
                     self.in_channels,
-                    self.seg_feat_channels,
+                    self.ins_out_channels // 2,
                     3,
                     padding=1,
                     conv_cfg=conv_cfg,
@@ -111,13 +113,10 @@ class SOLOV2HeadDCN(nn.Module):
                 continue
             for j in range(i):
                 if j == 0:
-                    if i == 3:
-                        in_channel = self.in_channels + 2
-                    else:
-                        in_channel = self.in_channels
+                    in_channel = self.in_channels + 2 if i == 3 else self.in_channels
                     one_conv = ConvModule(
                         in_channel,
-                        self.seg_feat_channels,
+                        self.ins_out_channels // 2,
                         3,
                         padding=1,
                         conv_cfg=conv_cfg,
@@ -129,8 +128,8 @@ class SOLOV2HeadDCN(nn.Module):
                     convs_per_level.add_module('upsample' + str(j), one_upsample)
                     continue
                 one_conv = ConvModule(
-                    self.seg_feat_channels,
-                    self.seg_feat_channels,
+                    self.ins_out_channels // 2,
+                    self.ins_out_channels // 2,
                     3,
                     padding=1,
                     conv_cfg=conv_cfg,
@@ -149,7 +148,6 @@ class SOLOV2HeadDCN(nn.Module):
                 conv_cfg = self.conv_cfg
 
             chn = self.in_channels + 2 if i == 0 else self.seg_feat_channels
-
             self.kernel_convs.append(
                 ConvModule(
                     chn,
@@ -160,6 +158,7 @@ class SOLOV2HeadDCN(nn.Module):
                     conv_cfg=conv_cfg,
                     norm_cfg=norm_cfg,
                     bias=norm_cfg is None))
+
             chn = self.in_channels if i == 0 else self.seg_feat_channels
             self.cate_convs.append(
                 ConvModule(
@@ -172,11 +171,13 @@ class SOLOV2HeadDCN(nn.Module):
                     norm_cfg=norm_cfg,
                     bias=norm_cfg is None))
         self.solo_kernel = nn.Conv2d(
-            self.seg_feat_channels, self.seg_feat_channels, 1, padding=0)
+            self.seg_feat_channels, self.ins_out_channels, 3, padding=1)
         self.solo_cate = nn.Conv2d(
             self.seg_feat_channels, self.cate_out_channels, 3, padding=1)
         self.solo_mask = ConvModule(
-            self.seg_feat_channels, self.seg_feat_channels, 1, padding=0, norm_cfg=norm_cfg, bias=norm_cfg is None)
+            self.ins_out_channels // 2, self.ins_out_channels, 1, padding=0,
+            conv_cfg=dict(type=self.type_dcn) if self.use_dcn_in_mask_feat else self.conv_cfg,
+            norm_cfg=norm_cfg, bias=norm_cfg is None)
 
     def init_weights(self):
         # TODO: init for feat_conv
