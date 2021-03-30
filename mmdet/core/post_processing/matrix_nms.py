@@ -26,7 +26,7 @@ def matrix_nms(seg_masks, cate_labels, cate_scores, kernel='gaussian', sigma=2.0
     else:
         if sum_masks is None:
             sum_masks = seg_masks.sum((1, 2)).float()  # (n, )
-        seg_masks = seg_masks.reshape(n_samples, -1).float()  # (n, 1)
+        seg_masks = seg_masks.reshape(n_samples, -1).float()  # (n, h*w)
     # inter.
     inter_matrix = torch.mm(seg_masks, seg_masks.transpose(1, 0))  # (n, n)
     # union.

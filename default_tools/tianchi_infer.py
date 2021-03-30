@@ -42,6 +42,8 @@ for i, img in enumerate(imgs):
                     if np.sum((masks[i, :, :] > 0) * (masks[j, :, :] > 0)) / np.sum(masks[j, :, :] > 0) > 0.85:
                         overlap = True
                         break
+            if overlap:
+                continue
             keep_inds.append(i)
         masks = masks[keep_inds]
 

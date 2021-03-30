@@ -421,7 +421,8 @@ class SOLOV2HeadDCN(nn.Module):
                 seg_preds,
                 cate_preds,
                 img_metas,
-                cfg):
+                cfg,
+                rescale=None):
         assert len(seg_preds) == len(cate_preds)
         num_levels = len(cate_preds)
         featmap_size = seg_preds[0].size()[-2:]
