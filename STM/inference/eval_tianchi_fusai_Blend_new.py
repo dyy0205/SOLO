@@ -52,7 +52,20 @@ def fn_timer(function):
     return function_timer
 
 
-def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='standard'):
+def get_bbox(mask, raw_w, raw_h, bbox_scale=1.8):
+    x, y, w, h = cv2.boundingRect(mask)
+    ori_x = x - w * (bbox_scale - 1) / 2
+    ori_y = y - h * (bbox_scale - 1) / 2
+    leftOffset = int(min(ori_x, 0))
+    topOffset = int(min(ori_y, 0))
+    x = int(ori_x - leftOffset)
+    y = int(ori_y - topOffset)
+    w = int(min(raw_w - x, bbox_scale * w))
+    h = int(min(raw_h - y, bbox_scale * h))
+    return x, y, w, h
+
+
+def Run_video(model, Fs, seg_results, num_frames, bbox_scale=None, model_name='standard'):
     seg_result_idx = [i[3] for i in seg_results]
 
     instance_idx = 1
@@ -74,8 +87,12 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
         start_frame_idx = np.argmax([max(i[2]) if i[2] != [] else 0 for i in seg_results])
         start_frame = seg_result_idx[start_frame_idx]
         start_mask = seg_results[start_frame_idx][0][0].astype(np.uint8)
-        # start_mask = cv2.resize(start_mask, (w, h))
-        start_mask = torch.from_numpy(start_mask).cuda()
+
+        x, y, w0, h0 = get_bbox(start_mask, w, h, bbox_scale=bbox_scale)
+        bbox = (x, y, w0, h0)
+        bbox0 = (x, y, w0, h0)
+        cropped_start_mask = cv2.resize(start_mask[y:y+h0, x:x+w0], (w, h))
+        cropped_start_mask = torch.from_numpy(cropped_start_mask).cuda()
 
         if model_name in ('enhanced', 'enhanced_motion'):
             Os = torch.zeros((b, c, int(h / 4), int(w / 4)))
@@ -120,13 +137,20 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                 Os[0, :, :, :] = patch
                 os.append(Os)
 
+        # network output
         Es = torch.zeros((b, 1, T, h, w)).float().cuda()
-        Es[:, :, start_frame] = start_mask
+        Es[:, :, start_frame] = cropped_start_mask
+        # final output
+        Rs = torch.zeros((b, 1, T, h, w)).float().cuda()
+        Rs[:, :, start_frame] = torch.from_numpy(start_mask).cuda()
+
         # to_memorize = [int(i) for i in np.arange(start_frame, num_frames, step=Mem_every)]
         to_memorize = [start_frame]
         for t in range(start_frame + 1, num_frames):  # frames after
             # memorize
-            pre_key, pre_value = model([Fs[:, :, t - 1], Es[:, :, t - 1]])
+            x, y, w0, h0 = bbox
+            cropped_pre_f = F.interpolate(Fs[:, :, t - 1, y:y+h0, x:x+w0], (h, w), mode='bilinear', align_corners=False)
+            pre_key, pre_value = model([cropped_pre_f, Es[:, :, t - 1]])
             pre_key = pre_key.unsqueeze(2)
             pre_value = pre_value.unsqueeze(2)
 
@@ -136,27 +160,38 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                 this_keys_m = torch.cat([keys, pre_key], dim=2)
                 this_values_m = torch.cat([values, pre_value], dim=2)
 
+            cropped_this_f = F.interpolate(Fs[:, :, t, y:y+h0, x:x+w0], (h, w), mode='bilinear', align_corners=False)
             # segment
             if model_name == 'enhanced':
-                logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m])
+                logits, _, _ = model([cropped_this_f, Os, this_keys_m, this_values_m])
             elif model_name == 'motion':
-                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t - 1]])
+                logits, _, _ = model([cropped_this_f, this_keys_m, this_values_m, Es[:, :, t - 1]])
             elif model_name == 'aspp':
-                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, torch.round(Es[:, :, t - 1])])
+                logits, _, _ = model([cropped_this_f, this_keys_m, this_values_m, torch.round(Es[:, :, t - 1])])
             elif model_name == 'sp':
-                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, torch.round(Es[:, :, t - 1])])
+                logits, _, _ = model([cropped_this_f, this_keys_m, this_values_m, torch.round(Es[:, :, t - 1])])
             elif model_name == 'standard':
-                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m])
+                logits, _, _ = model([cropped_this_f, this_keys_m, this_values_m])
             elif model_name == 'enhanced_motion':
-                logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m, torch.round(Es[:, :, t - 1])])
+                logits, _, _ = model([cropped_this_f, Os, this_keys_m, this_values_m, torch.round(Es[:, :, t - 1])])
             elif model_name == 'varysize':
-                logits, _, _ = model([Fs[:, :, t], os, this_keys_m, this_values_m])
+                logits, _, _ = model([cropped_this_f, os, this_keys_m, this_values_m])
             else:
                 raise NotImplementedError
             em = F.softmax(logits, dim=1)[:, 1]  # B h w
             Es[:, 0, t] = em
 
+            em_ori = F.interpolate(em.unsqueeze(1), (h0, w0), mode='bilinear', align_corners=False)  # B 1 h w
+            em_ori = em_ori.squeeze(1)
+            Rs[:, 0, t, y:y+h0, x:x+w0] = em_ori
+
+            pred_ori = torch.round(Rs[:, 0, t].float())[0].detach().cpu().numpy().astype(np.uint8)
+            bbox = get_bbox(pred_ori, w, h, bbox_scale=bbox_scale)
+            if bbox[2] < 16 or bbox[3] < 16:
+                bbox = 0, 0, w, h
+
             # check solo result
+            # pred = torch.round(Rs[:, 0, t].float())
             pred = torch.round(em.float())
             if t in seg_result_idx:
                 idx = seg_result_idx.index(t)
@@ -165,6 +200,7 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                 ious = []
                 for mask in masks:
                     mask = mask.astype(np.uint8)
+                    mask = cv2.resize(mask[y:y+h0, x:x+w0], (w, h))
                     mask = torch.from_numpy(mask)
                     iou = get_video_mIoU(pred, mask)
                     ious.append(iou)
@@ -176,7 +212,12 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                         mask = torch.from_numpy(masks[same_idx]).cuda()
                         # if get_video_mIoU(mask, torch.round(Es[:, 0, t - 1])) \
                         #     > get_video_mIoU(pred, torch.round(Es[:, 0, t - 1])):
-                        Es[:, 0, t] = mask
+                        Rs[:, 0, t] = mask
+
+                        x, y, w0, h0 = bbox
+                        cropped_mask = cv2.resize(masks[same_idx][y:y+h0, x:x+w0], (w, h))
+                        Es[:, 0, t] = torch.from_numpy(cropped_mask).cuda()
+
                         reserve.remove(same_idx)
                         # if abs(to_memorize[-1] - t) >= TO_MEMORY_MIN_INTERVAL:
                         to_memorize.append(t)
@@ -196,11 +237,14 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
             if t - 1 in to_memorize:
                 keys, values = this_keys_m, this_values_m
 
+        bbox = bbox0
         # to_memorize = [start_frame - int(i) for i in np.arange(0, start_frame + 1, step=Mem_every)]
         to_memorize = [start_frame]
         for t in list(range(0, start_frame))[::-1]:  # frames before
             # memorize
-            pre_key, pre_value = model([Fs[:, :, t + 1], Es[:, :, t + 1]])
+            x, y, w0, h0 = bbox
+            cropped_pre_f = F.interpolate(Fs[:, :, t + 1, y:y+h0, x:x+w0], (h, w), mode='bilinear', align_corners=False)
+            pre_key, pre_value = model([cropped_pre_f, Es[:, :, t + 1]])
             pre_key = pre_key.unsqueeze(2)
             pre_value = pre_value.unsqueeze(2)
 
@@ -210,27 +254,38 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                 this_keys_m = torch.cat([keys, pre_key], dim=2)
                 this_values_m = torch.cat([values, pre_value], dim=2)
 
+            cropped_this_f = F.interpolate(Fs[:, :, t, y:y+h0, x:x+w0], (h, w), mode='bilinear', align_corners=False)
             # segment
             if model_name == 'enhanced':
-                logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m])
+                logits, _, _ = model([cropped_this_f, Os, this_keys_m, this_values_m])
             elif model_name == 'motion':
-                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, Es[:, :, t + 1]])
+                logits, _, _ = model([cropped_this_f, this_keys_m, this_values_m, Es[:, :, t + 1]])
             elif model_name == 'aspp':
-                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, torch.round(Es[:, :, t + 1])])
+                logits, _, _ = model([cropped_this_f, this_keys_m, this_values_m, torch.round(Es[:, :, t + 1])])
             elif model_name == 'sp':
-                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m, torch.round(Es[:, :, t + 1])])
+                logits, _, _ = model([cropped_this_f, this_keys_m, this_values_m, torch.round(Es[:, :, t + 1])])
             elif model_name == 'standard':
-                logits, _, _ = model([Fs[:, :, t], this_keys_m, this_values_m])
+                logits, _, _ = model([cropped_this_f, this_keys_m, this_values_m])
             elif model_name == 'enhanced_motion':
-                logits, _, _ = model([Fs[:, :, t], Os, this_keys_m, this_values_m, torch.round(Es[:, :, t + 1])])
+                logits, _, _ = model([cropped_this_f, Os, this_keys_m, this_values_m, torch.round(Es[:, :, t + 1])])
             elif model_name == 'varysize':
-                logits, _, _ = model([Fs[:, :, t], os, this_keys_m, this_values_m])
+                logits, _, _ = model([cropped_this_f, os, this_keys_m, this_values_m])
             else:
                 raise NotImplementedError
             em = F.softmax(logits, dim=1)[:, 1]  # B h w
             Es[:, 0, t] = em
 
+            em_ori = F.interpolate(em.unsqueeze(1), (h0, w0), mode='bilinear', align_corners=False)  # B 1 h w
+            em_ori = em_ori.squeeze(1)
+            Rs[:, 0, t, y:y+h0, x:x+w0] = em_ori
+
+            pred_ori = torch.round(Rs[:, 0, t].float())[0].detach().cpu().numpy().astype(np.uint8)
+            bbox = get_bbox(pred_ori, w, h, bbox_scale=bbox_scale)
+            if bbox[2] < 16 or bbox[3] < 16:
+                bbox = 0, 0, w, h
+
             # check solo result
+            # pred = torch.round(Rs[:, 0, t].float())
             pred = torch.round(em.float())
             if t in seg_result_idx:
                 idx = seg_result_idx.index(t)
@@ -239,6 +294,7 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                 ious = []
                 for mask in masks:
                     mask = mask.astype(np.uint8)
+                    mask = cv2.resize(mask[y:y+h0, x:x+w0], (w, h))
                     mask = torch.from_numpy(mask)
                     iou = get_video_mIoU(pred, mask)
                     ious.append(iou)
@@ -249,8 +305,13 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
                         same_idx = np.argmax(ious)
                         mask = torch.from_numpy(masks[same_idx]).cuda()
                         # if get_video_mIoU(mask, torch.round(Es[:, 0, t + 1])) \
-                        #         > get_video_mIoU(pred, torch.round(Es[:, 0, t + 1])):
-                        Es[:, 0, t] = mask
+                        #     > get_video_mIoU(pred, torch.round(Es[:, 0, t + 1])):
+                        Rs[:, 0, t] = mask
+
+                        x, y, w0, h0 = bbox
+                        cropped_mask = cv2.resize(masks[same_idx][y:y+h0, x:x+w0], (w, h))
+                        Es[:, 0, t] = torch.from_numpy(cropped_mask).cuda()
+
                         reserve.remove(same_idx)
                         # if abs(to_memorize[-1] - t) >= TO_MEMORY_MIN_INTERVAL:
                         to_memorize.append(t)
@@ -274,7 +335,7 @@ def Run_video(model, Fs, seg_results, num_frames, Mem_every=None, model_name='st
             seg_results[start_frame_idx][j].pop(0)
 
         # pred = torch.round(Es.float())
-        results.append((Es, instance_idx))
+        results.append((Rs, instance_idx))
 
         instance_idx += 1
 
@@ -558,7 +619,7 @@ def vos_inference():
                     seg_results = mask_inference(video_name, TEST_SCALE, SOLO_INTERVAL, SCORE_THR, hflip=False)
                 else:
                     seg_results = mask_inference(video_name, target_shape, SOLO_INTERVAL, SCORE_THR, hflip=False)
-                results = Run_video(model, f, seg_results, num_frames, Mem_every=5, model_name=MODEL_NAME)
+                results = Run_video(model, f, seg_results, num_frames, bbox_scale=BBOX_SCALE, model_name=MODEL_NAME)
                 if idx == 1:
                     for i, (es, ins) in enumerate(results):
                         es = es.cpu().detach().numpy()
@@ -570,14 +631,14 @@ def vos_inference():
                     for i, (es, ins) in enumerate(results):
                         e = torch.empty(b, 1, t, h, w)
                         for f in range(t):
-                            e[:, :, f, :, :] = F.interpolate(es[:, :, f, :, :], (h, w))
+                            e[:, :, f, :, :] = F.interpolate(es[:, :, f, :, :], (h, w), mode='bilinear', align_corners=False)
                         e = e.cuda()
                         results[i] = (e, ins)
                 result.append(results)
             results = merge_result(result)
         else:
             seg_results = mask_inference(video_name, target_shape, SOLO_INTERVAL, SCORE_THR)
-            results = Run_video(model, Fs, seg_results, num_frames, Mem_every=5, model_name=MODEL_NAME)
+            results = Run_video(model, Fs, seg_results, num_frames, bbox_scale=BBOX_SCALE, model_name=MODEL_NAME)
 
         results = [(torch.round(a), b) for a, b in results]
 
@@ -1014,15 +1075,15 @@ if __name__ == '__main__':
     MODE = 'online'
     if MODE == 'online':
         DATA_ROOT = '/versa/dyy/solo-vos/user_data/data'
-        IMG_ROOT = '/versa/dataset/TIANCHI2021/preTest'
+        IMG_ROOT = '/versa/dyy/dataset/TIANCHI/PreRoundData/Test'
         MODEL_PATH = '/versa/dyy/solo-vos/user_data/model_data/sp_interval4.pth'
         # MODEL_PATH = '/workspace/user_data/model_data/enhanced_motion_ckpt_1e_0827.pth'
         SAVE_PATH = '/versa/dyy/solo-vos'
         TMP_PATH = '/versa/dyy/solo-vos/user_data/tmp_data'
         MERGE_PATH = '/versa/dyy/solo-vos/user_data/merge_data'
         MASK_PATH = os.path.join(DATA_ROOT, 'Annotations')
-        CONFIG_FILE = r'/versa/dyy/solo-vos/cfg/aug_solov2_r101.py'
-        CKPT_FILE = r'/versa/dyy/solo-vos/user_data/model_data/solov2_9cls.pth'
+        CONFIG_FILE = r'/home/dingyangyang/SOLO/cfg/solov2_r101_dcn.py'
+        CKPT_FILE = r'/home/dingyangyang/SOLO/solov2_dcn.pth'
         TEMPLATE_MASK = r'/versa/dyy/solo-vos/user_data/template_data/00001.png'
 
         MODEL_NAME = 'sp'
@@ -1078,6 +1139,7 @@ if __name__ == '__main__':
     # IOU2 = 0.1
     # TO_MEMORY_MIN_INTERVAL = 5
     BLEND_IOU_THR = 1
+    BBOX_SCALE = 1.8
 
     SOLO_MODEL = init_detector(CONFIG_FILE, CKPT_FILE, device='cuda:0')
 
