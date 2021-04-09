@@ -6,16 +6,16 @@ import os, glob, time
 
 config_file = './cfg/aug_solov2_r101.py'
 # download the checkpoint from model zoo and put it in `checkpoints/`
-checkpoint_file = 'solov2_r101_tuned.pth'
+checkpoint_file = 'solov2_9cls.pth'
 
 # build the model from a config file and a checkpoint file
 model = init_detector(config_file, checkpoint_file, device='cuda:0')
 
 # test a single image
-img = './versa-car-2209.jpg'
+img = '00100.jpg'
 result, cost_time = inference_detector(model, img)
-show_result_ins(img, result, model.CLASSES, score_thr=0.3,
-                    out_file='./2209_out.png')
+show_result_ins(img, result, model.CLASSES, score_thr=0.1,
+                    out_file='00100.png')
 
 # imgs = glob.glob('../coco/new_test/*.*')
 # save_dir = '../coco/new_test_out'

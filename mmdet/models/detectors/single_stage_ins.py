@@ -1,4 +1,7 @@
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from mmdet.core import matrix_nms
 
 from mmdet.core import bbox2result
 from .. import builder
@@ -78,5 +81,90 @@ class SingleStageInsDetector(BaseDetector):
         seg_result = self.bbox_head.get_seg(*seg_inputs)
         return seg_result  
 
+    # def aug_test(self, imgs, img_metas, rescale=False):
+    #     raise NotImplementedError
+
     def aug_test(self, imgs, img_metas, rescale=False):
-        raise NotImplementedError
+        """Test with augmentations.
+        If rescale is False, then returned masks will fit the scale of imgs[0].
+        """
+        ori_shape = img_metas[0][0]['ori_shape'][:2]
+
+        meta_result_list = []
+        for img, img_meta in zip(imgs, img_metas):
+            x = self.extract_feat(img)
+            seg_preds, cate_preds = self.bbox_head(x, eval=True)
+            img_shape = img_meta[0]['img_shape']
+            img_result_list = self.bbox_head.get_seg_aug(seg_preds, cate_preds, img_shape, self.test_cfg)
+            if img_result_list != []:
+                meta_result_list.append(img_result_list)
+
+        if meta_result_list == []:
+            return []
+
+        img_output = []
+        for img_result in zip(*meta_result_list):
+            seg_masks, seg_preds, sum_masks, cate_scores, cate_labels = map(list, zip(*img_result))
+            unified_size = tuple(seg_masks[0].shape[-2:])
+            for i in range(1, len(seg_masks)):
+                seg_masks[i] = F.interpolate(seg_masks[i].float().unsqueeze(0),
+                                             size=unified_size,
+                                             mode='bilinear',
+                                             align_corners=False).squeeze(0)
+                seg_preds[i] = F.interpolate(seg_preds[i].unsqueeze(0),
+                                             size=unified_size,
+                                             mode='bilinear',
+                                             align_corners=False).squeeze(0)
+                if img_metas[i][0]['flip']:
+                    seg_masks[i] = torch.flip(seg_masks[i], dims=[2])
+                    seg_preds[i] = torch.flip(seg_preds[i], dims=[2])
+            seg_masks = torch.cat(seg_masks, dim=0)
+            seg_preds = torch.cat(seg_preds, dim=0)
+            sum_masks = torch.cat(sum_masks, dim=0)
+            cate_scores = torch.cat(cate_scores, dim=0)
+            cate_labels = torch.cat(cate_labels, dim=0)
+            # import cv2
+            # for i, seg_mask in enumerate(seg_masks):
+            #     cv2.imwrite('/versa/dyy/SOLO/tta/{}.png'.format(i),
+            #                 seg_mask.cpu().numpy().astype(np.uint8) * 255)
+
+            # sort and keep top nms_pre
+            sort_inds = torch.argsort(cate_scores, descending=True)
+            if len(sort_inds) > self.test_cfg.nms_pre:
+                sort_inds = sort_inds[:self.test_cfg.nms_pre]
+            seg_masks = seg_masks[sort_inds, :, :]
+            seg_preds = seg_preds[sort_inds, :, :]
+            sum_masks = sum_masks[sort_inds]
+            cate_scores = cate_scores[sort_inds]
+            cate_labels = cate_labels[sort_inds]
+
+            # Matrix NMS
+            cate_scores = matrix_nms(seg_masks, cate_labels, cate_scores,
+                                     kernel=self.test_cfg.kernel, sigma=self.test_cfg.sigma,
+                                     sum_masks=sum_masks)
+
+            # filter.
+            keep = cate_scores >= self.test_cfg.update_thr
+            if keep.sum() == 0:
+                return None
+            seg_preds = seg_preds[keep, :, :]
+            cate_scores = cate_scores[keep]
+            cate_labels = cate_labels[keep]
+
+            # sort and keep top_k
+            sort_inds = torch.argsort(cate_scores, descending=True)
+            if len(sort_inds) > self.test_cfg.max_per_img:
+                sort_inds = sort_inds[:self.test_cfg.max_per_img]
+            seg_preds = seg_preds[sort_inds, :, :]
+            cate_scores = cate_scores[sort_inds]
+            cate_labels = cate_labels[sort_inds]
+
+            seg_masks = F.interpolate(seg_preds.unsqueeze(0),
+                                      size=ori_shape,
+                                      mode='bilinear',
+                                      align_corners=False).squeeze(0)
+            seg_masks = seg_masks > self.test_cfg.mask_thr
+            output = (seg_masks, cate_labels, cate_scores)
+            img_output.append(output)
+
+        return img_output

@@ -1126,8 +1126,8 @@ if __name__ == '__main__':
     OL_ITER_PER_VIDEO = 50
     OL_SCORE_THR = 0.7
 
-    WITH_FLIP = True
     # WITH_FLIP = True
+    WITH_FLIP = False
     # TEST_SCALE = (1120, 608)
     TEST_SCALE = None
     TARGET_SHAPE = (1008, 560)
