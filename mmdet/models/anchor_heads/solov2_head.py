@@ -594,7 +594,7 @@ class SOLOV2Head(nn.Module):
                                   scale_factor=4,
                                   mode='bilinear',
                                   align_corners=False)[:, :, :h, :w].squeeze(0)
-        return seg_masks, seg_preds, sum_masks, cate_scores, cate_labels
+        return seg_masks, seg_preds, cate_scores, cate_labels
 
     def get_seg_aug(self,
                     seg_preds,

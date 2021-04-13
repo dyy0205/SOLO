@@ -1014,12 +1014,12 @@ if __name__ == '__main__':
     MODE = 'online'
     if MODE == 'online':
         DATA_ROOT = '/versa/dyy/solo-vos/user_data/data'
-        IMG_ROOT = '/versa/dyy/dataset/TIANCHI/PreRoundData/Test'
+        IMG_ROOT = '/versa/dyy/dataset/TIANCHI/PreRoundData/preTest'
         MODEL_PATH = '/versa/dyy/solo-vos/user_data/model_data/sp_interval4.pth'
         # MODEL_PATH = '/workspace/user_data/model_data/enhanced_motion_ckpt_1e_0827.pth'
         SAVE_PATH = '/versa/dyy/solo-vos'
-        TMP_PATH = '/versa/dyy/solo-vos/user_data/tmp_data2'
-        MERGE_PATH = '/versa/dyy/solo-vos/user_data/merge_data2'
+        TMP_PATH = '/versa/dyy/solo-vos/user_data/tmp_data_dcn'
+        MERGE_PATH = '/versa/dyy/solo-vos/user_data/merge_data_dcn'
         MASK_PATH = os.path.join(DATA_ROOT, 'Annotations')
         CONFIG_FILE = r'/home/dingyangyang/SOLO/cfg/solov2_r101_dcn.py'
         CKPT_FILE = r'/home/dingyangyang/SOLO/solov2_dcn.pth'
@@ -1065,8 +1065,8 @@ if __name__ == '__main__':
     OL_ITER_PER_VIDEO = 50
     OL_SCORE_THR = 0.7
 
-    # WITH_FLIP = True
-    WITH_FLIP = False
+    WITH_FLIP = True
+    # WITH_FLIP = False
     # TEST_SCALE = (1120, 608)
     TEST_SCALE = None
     TARGET_SHAPE = (1008, 560)

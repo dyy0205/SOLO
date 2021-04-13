@@ -8,6 +8,7 @@ from .. import builder
 from ..registry import DETECTORS
 from .base import BaseDetector
 import numpy as np
+import cv2
 
 
 @DETECTORS.register_module
@@ -79,7 +80,7 @@ class SingleStageInsDetector(BaseDetector):
         #     cv2.imwrite('/home/dingyangyang/SOLO/mask_plot/{}_{}.jpg'.format(str(i), str(round(prob, 4))), mask)
         seg_inputs = outs + (img_meta, self.test_cfg, rescale)
         seg_result = self.bbox_head.get_seg(*seg_inputs)
-        return seg_result  
+        return seg_result
 
     # def aug_test(self, imgs, img_metas, rescale=False):
     #     raise NotImplementedError
@@ -104,7 +105,8 @@ class SingleStageInsDetector(BaseDetector):
 
         img_output = []
         for img_result in zip(*meta_result_list):
-            seg_masks, seg_preds, sum_masks, cate_scores, cate_labels = map(list, zip(*img_result))
+            seg_masks, seg_preds, cate_scores, cate_labels = map(list, zip(*img_result))
+            # print([seg_mask.shape for seg_mask in seg_masks])
             unified_size = tuple(seg_masks[0].shape[-2:])
             for i in range(1, len(seg_masks)):
                 seg_masks[i] = F.interpolate(seg_masks[i].float().unsqueeze(0),
@@ -120,13 +122,8 @@ class SingleStageInsDetector(BaseDetector):
                     seg_preds[i] = torch.flip(seg_preds[i], dims=[2])
             seg_masks = torch.cat(seg_masks, dim=0)
             seg_preds = torch.cat(seg_preds, dim=0)
-            sum_masks = torch.cat(sum_masks, dim=0)
             cate_scores = torch.cat(cate_scores, dim=0)
             cate_labels = torch.cat(cate_labels, dim=0)
-            # import cv2
-            # for i, seg_mask in enumerate(seg_masks):
-            #     cv2.imwrite('/versa/dyy/SOLO/tta/{}.png'.format(i),
-            #                 seg_mask.cpu().numpy().astype(np.uint8) * 255)
 
             # sort and keep top nms_pre
             sort_inds = torch.argsort(cate_scores, descending=True)
@@ -134,22 +131,26 @@ class SingleStageInsDetector(BaseDetector):
                 sort_inds = sort_inds[:self.test_cfg.nms_pre]
             seg_masks = seg_masks[sort_inds, :, :]
             seg_preds = seg_preds[sort_inds, :, :]
-            sum_masks = sum_masks[sort_inds]
             cate_scores = cate_scores[sort_inds]
             cate_labels = cate_labels[sort_inds]
+            # for i, seg_mask in enumerate(seg_masks):
+            #     cv2.imwrite(f'/home/dingyangyang/SOLO/tta/{i}_{cate_scores[i]}.png',
+            #                 seg_mask.cpu().numpy().astype(np.uint8) * 255)
 
             # Matrix NMS
             cate_scores = matrix_nms(seg_masks, cate_labels, cate_scores,
-                                     kernel=self.test_cfg.kernel, sigma=self.test_cfg.sigma,
-                                     sum_masks=sum_masks)
+                                     kernel=self.test_cfg.kernel, sigma=self.test_cfg.sigma)
 
             # filter.
-            keep = cate_scores >= self.test_cfg.update_thr
+            keep = cate_scores >= 0 # self.test_cfg.update_thr
             if keep.sum() == 0:
                 return None
             seg_preds = seg_preds[keep, :, :]
             cate_scores = cate_scores[keep]
             cate_labels = cate_labels[keep]
+            # for i in torch.nonzero(keep).squeeze():
+            #     cv2.imwrite(f'/home/dingyangyang/SOLO/tta/{i}__{cate_scores[i]}.png',
+            #                 seg_masks[i, :, :].cpu().numpy().astype(np.uint8) * 255)
 
             # sort and keep top_k
             sort_inds = torch.argsort(cate_scores, descending=True)

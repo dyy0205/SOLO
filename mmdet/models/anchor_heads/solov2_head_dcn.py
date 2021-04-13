@@ -538,3 +538,87 @@ class SOLOV2HeadDCN(nn.Module):
                                   align_corners=False).squeeze(0)
         seg_masks = seg_masks > cfg.mask_thr
         return seg_masks, cate_labels, cate_scores
+
+    def get_seg_single_aug(self,
+                           cate_preds,
+                           seg_preds,
+                           img_shape,
+                           cfg):
+        assert len(cate_preds) == len(seg_preds)
+
+        h, w, _ = img_shape
+
+        # process.
+        inds = (cate_preds > cfg.score_thr)
+        # category scores.
+        cate_scores = cate_preds[inds]
+        if len(cate_scores) == 0:
+            return None
+        # category labels.
+        inds = inds.nonzero()
+        cate_labels = inds[:, 1]
+
+        # strides.
+        size_trans = cate_labels.new_tensor(self.seg_num_grids).pow(2).cumsum(0)
+        strides = cate_scores.new_ones(size_trans[-1])
+        n_stage = len(self.seg_num_grids)
+        strides[:size_trans[0]] *= self.strides[0]
+        for ind_ in range(1, n_stage):
+            strides[size_trans[ind_ - 1]:size_trans[ind_]] *= self.strides[ind_]
+        strides = strides[inds[:, 0]]
+
+        # masks.
+        seg_preds = seg_preds[inds[:, 0]]
+        seg_masks = (seg_preds > cfg.mask_thr).float()
+        sum_masks = seg_masks.sum((1, 2)).float()
+
+        # filter.
+        keep = sum_masks > strides
+        if keep.sum() == 0:
+            return None
+
+        seg_masks = seg_masks[keep, ...]
+        seg_preds = seg_preds[keep, ...]
+        sum_masks = sum_masks[keep]
+        cate_scores = cate_scores[keep]
+        cate_labels = cate_labels[keep]
+
+        # mask scoring.
+        seg_scores = (seg_preds * seg_masks).sum((1, 2)) / sum_masks
+        cate_scores *= seg_scores
+
+        seg_masks = F.interpolate(seg_masks.unsqueeze(0),
+                                  scale_factor=4,
+                                  mode='bilinear',
+                                  align_corners=False)[:, :, :h, :w].squeeze(0)
+        seg_preds = F.interpolate(seg_preds.unsqueeze(0),
+                                  scale_factor=4,
+                                  mode='bilinear',
+                                  align_corners=False)[:, :, :h, :w].squeeze(0)
+        return seg_masks, seg_preds, cate_scores, cate_labels
+
+    def get_seg_aug(self,
+                    seg_preds,
+                    cate_preds,
+                    img_shape,
+                    cfg):
+        assert len(seg_preds) == len(cate_preds)
+        num_levels = len(cate_preds)
+        num_imgs = len(cate_preds[0])
+
+        result_list = []
+        for img_id in range(num_imgs):
+            cate_pred_list = [
+                cate_preds[i][img_id].view(-1, self.cate_out_channels).detach() for i in range(num_levels)
+            ]
+            seg_pred_list = [
+                seg_preds[i][img_id].detach() for i in range(num_levels)
+            ]
+
+            cate_pred_list = torch.cat(cate_pred_list, dim=0)
+            seg_pred_list = torch.cat(seg_pred_list, dim=0)
+
+            result = self.get_seg_single_aug(cate_pred_list, seg_pred_list, img_shape, cfg)
+            if result is not None:
+                result_list.append(result)
+        return result_list
